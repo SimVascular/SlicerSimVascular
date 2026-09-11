@@ -79,6 +79,38 @@ rather than reported:
 - **A boundary cell standing against no volume element**, which the solver has nothing to
   integrate the boundary term against.
 
+## Against SimVascular's own writer
+
+The format is SimVascular's, so `svmeshcomplete` follows
+[`sv4gui_MeshLegacyIO.cxx`](https://github.com/SimVascular/SimVascular/blob/master/Code/Source/sv4gui/Modules/Mesh/Common/sv4gui_MeshLegacyIO.cxx)'s
+`WriteFiles` rather than inventing a compatible-looking format of its own.
+
+The one semantic worth stating is the ids. SimVascular's `ResetFaceSurfaceIds` rewrites a
+face's `GlobalNodeID` to `node_map[id] + 1` and its `GlobalElementID` to
+`elem_map[id] + 1`, where those maps take an id to its *index* in the volume mesh's
+arrays — so a face's ids are the 1-based positions of its nodes and its owning elements in
+the volume mesh, which is what the solver looks them up as. SimVascular has to remap
+because the mesher hands it ids it did not choose; here the ids are assigned over the
+volume mesh's own points and cells, so the same invariant holds by construction.
+
+Otherwise: faces are extracted by thresholding `ModelFaceID` with the points compacted,
+as `PlyDtaUtils_GetFacePolyData` does; everything is written zlib-compressed, appended and
+un-encoded, as SimVascular's writers are; and `walls_combined.vtp` is the wall faces
+together. SimVascular appends its separately extracted faces and cleans them with point
+merging, because extracting them separately duplicated the points along every seam; here
+the wall cells come out of the exterior in one pass, so there is nothing to merge.
+
+Two deliberate differences:
+
+- **A wall in more than one piece.** SimVascular writes
+  `walls_combined_connected_region_<j>.vtp` per piece *instead of* `walls_combined.vtp`.
+  This writes those files too, and `walls_combined.vtp` as well, because a case config
+  naming a file the export decided not to write fails at the solver rather than here. The
+  panel says how many pieces there were, which is the part worth acting on.
+- **More than one `ModelRegionID`.** SimVascular splits a multi-domain mesh into
+  `<dir>_domain-<i>` folders. This refuses instead, rather than flattening the regions
+  into one without saying so. A mesh carrying a single region keeps its id.
+
 ## Face ids array
 
 Which cell array the face ids are read from, by the same rule CFD Mesh Generator uses: the

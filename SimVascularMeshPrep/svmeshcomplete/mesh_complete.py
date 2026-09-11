@@ -16,13 +16,48 @@ Arrays: `GlobalNodeID` (point, 1-based) numbers the volume nodes, and a face car
 ids of the volume nodes its own points are -- that is how the solver binds a boundary
 condition, so faces keep only their own points. `GlobalElementID` (cell, 1-based) numbers
 the elements, and on a face it is the element behind each boundary cell. `ModelFaceID`
-says which face a boundary cell is on. `ModelRegionID` is all 1 and unread by the solver,
-written because every mesh folder this workflow has run carried it.
+says which face a boundary cell is on. `ModelRegionID` is unread by the solver and written
+because every mesh folder this has run carried it.
+
+## Against SimVascular's own writer
+
+The format is SimVascular's, so this follows `sv4gui_MeshLegacyIO.cxx` (`WriteFiles`)
+rather than inventing a compatible-looking one. What matches, and why it matches when the
+route here is different:
+
+- **The id semantics.** SimVascular's `ResetFaceSurfaceIds` rewrites a face's
+  `GlobalNodeID` to `node_map[id] + 1` and its `GlobalElementID` to `elem_map[id] + 1`,
+  where those maps take an id to its *index* in the volume mesh's arrays. So a face's ids
+  are the 1-based positions of its nodes and owning elements in the volume mesh. It has to
+  remap because the mesher hands it ids it did not choose. Here the ids are assigned --
+  `arange(1, n+1)` over the volume mesh's own points and cells -- so the same invariant
+  holds by construction and there is nothing to remap.
+- **Face extraction.** `PlyDtaUtils_GetFacePolyData` thresholds on `ModelFaceID` and runs
+  `vtkDataSetSurfaceFilter`, which compacts the points; the equivalent here is
+  `vtkExtractSelection` with `PreserveTopologyOff` and `vtkGeometryFilter`.
+- **Writer settings.** Zlib-compressed, appended, not base64-encoded, both there and here.
+- **`walls_combined.vtp`.** SimVascular appends the wall faces it already extracted and
+  runs `vtkCleanPolyData` with point merging, because extracting them separately
+  duplicated the points along every seam between two wall faces. Here the wall cells are
+  taken out of the exterior in one pass, so those points were never duplicated and there
+  is nothing to merge.
+
+Two places it deliberately does something else:
+
+- **A wall in more than one piece.** SimVascular writes
+  `walls_combined_connected_region_<j>.vtp` per piece *instead of* `walls_combined.vtp`.
+  This writes those files too, and `walls_combined.vtp` as well, because a case config
+  naming a file the export decided not to write fails at the solver rather than here. The
+  result says how many pieces there were, which is the part worth acting on: a wall in
+  two pieces is usually a domain in two pieces.
+- **More than one `ModelRegionID`.** SimVascular splits a multi-domain mesh into
+  `<dir>_domain-<i>` folders. This refuses instead, rather than flattening the regions
+  into one silently.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -39,6 +74,7 @@ MESH_SURFACES_DIR_NAME = "mesh-surfaces"
 VOLUME_MESH_NAME = "mesh-complete.mesh.vtu"
 EXTERIOR_SURFACE_NAME = "mesh-complete.exterior.vtp"
 WALLS_COMBINED_NAME = "walls_combined.vtp"
+WALLS_COMBINED_REGION_NAME = "walls_combined_connected_region_{index}.vtp"
 
 NODE_ID_ARRAY = "GlobalNodeID"
 ELEMENT_ID_ARRAY = "GlobalElementID"
@@ -64,6 +100,9 @@ class MeshCompleteResult:
     number_of_elements: int
     element_type: str
     face_cell_counts: dict[str, int]
+    wall_regions: int = 1
+    """Connected pieces the wall came out in. More than one is usually a split domain."""
+    wall_region_surfaces: list = field(default_factory=list)
 
     def summary(self) -> str:
         width = max(len(name) for name in self.face_cell_counts)
@@ -71,10 +110,17 @@ class MeshCompleteResult:
             f"  {name:<{width}}  {self.face_cell_counts[name]:>8,} cells"
             for name in sorted(self.face_cell_counts)
         )
-        return (
+        summary = (
             f"{self.number_of_elements:,} {self.element_type} elements over "
             f"{self.number_of_nodes:,} nodes\n{len(self.face_surfaces)} faces:\n{faces}"
         )
+        if self.wall_regions > 1:
+            summary += (
+                f"\n\nThe wall came out in {self.wall_regions} connected pieces, written "
+                "separately as well. A wall in more than one piece is usually a domain in "
+                "more than one piece."
+            )
+        return summary
 
 
 def write_mesh_complete(
@@ -121,6 +167,8 @@ def write_mesh_complete(
         )
     _check_face_ids(face_ids, volume_cells, boundary_cells, face_table)
 
+    region_id = _single_region_id(mesh, volume_cells)
+
     node_ids = np.arange(1, mesh.GetNumberOfPoints() + 1)
     cells.add_int_array(mesh, NODE_ID_ARRAY, node_ids, on_points=True)
 
@@ -129,7 +177,9 @@ def write_mesh_complete(
     element_ids = np.arange(1, volume.GetNumberOfCells() + 1, dtype=np.int32)
     cells.add_int_array(volume, NODE_ID_ARRAY, node_ids, on_points=True)
     cells.add_int_array(volume, ELEMENT_ID_ARRAY, element_ids, on_points=False)
-    cells.add_int_array(volume, REGION_ID_ARRAY, np.ones(len(element_ids)), on_points=False)
+    cells.add_int_array(
+        volume, REGION_ID_ARRAY, np.full(len(element_ids), region_id), on_points=False
+    )
 
     owners = _owning_element(mesh, volume_cells, boundary_cells)
     orphans = int(np.count_nonzero(owners < 0))
@@ -141,7 +191,12 @@ def write_mesh_complete(
     exterior = cells.as_polydata(cells.extract(mesh, boundary_cells))
     cells.add_int_array(exterior, ELEMENT_ID_ARRAY, element_ids[owners], on_points=False)
     cells.add_int_array(exterior, FACE_ID_ARRAY, face_ids[boundary_cells], on_points=False)
-    cells.add_int_array(exterior, REGION_ID_ARRAY, np.ones(exterior.GetNumberOfCells()), on_points=False)
+    cells.add_int_array(
+        exterior,
+        REGION_ID_ARRAY,
+        np.full(exterior.GetNumberOfCells(), region_id),
+        on_points=False,
+    )
     cells.keep_only(exterior.GetCellData(), SOLVER_CELL_ARRAYS)
     cells.keep_only(exterior.GetPointData(), (NODE_ID_ARRAY,))
 
@@ -155,6 +210,8 @@ def write_mesh_complete(
         number_of_elements=len(element_ids),
         element_type=element_type,
         face_cell_counts=written["counts"],
+        wall_regions=written["wall_regions"],
+        wall_region_surfaces=written["wall_region_surfaces"],
     )
 
 
@@ -225,6 +282,26 @@ def _element_type_name(mesh) -> str:
         ) from None
 
 
+def _single_region_id(mesh, volume_cells) -> int:
+    """The mesh's one `ModelRegionID`, or 1 where it carries none.
+
+    SimVascular splits a mesh carrying several into a folder per domain. This does not, so
+    rather than write them all out under one region id -- which loses the distinction
+    without saying so -- it refuses.
+    """
+    array = mesh.GetCellData().GetArray(REGION_ID_ARRAY)
+    if array is None:
+        return 1
+    regions = sorted(set(vtk_to_numpy(array)[volume_cells].astype(np.int64).tolist()))
+    if len(regions) > 1:
+        raise MeshCompleteError(
+            f"The mesh carries {len(regions)} model regions ({regions}). A multi-domain "
+            "mesh is a folder per domain in SimVascular, and this writes one folder, so "
+            "it would flatten them into a single region. Split it by ModelRegionID first."
+        )
+    return int(regions[0])
+
+
 def _check_face_ids(face_ids, volume_cells, boundary_cells, face_table: FaceTable) -> None:
     """Refuse a mesh whose face ids and face table do not describe the same surface."""
     stray = set(np.unique(face_ids[volume_cells]).tolist()) - {VOLUME_FACE_ID}
@@ -280,7 +357,46 @@ def _write_all(exterior, volume, face_table: FaceTable, mesh_dir: Path) -> dict:
     walls = _face_surface(exterior, np.flatnonzero(np.isin(face_ids, wall_ids)))
     written["walls"] = io.write_dataset(walls, mesh_dir / WALLS_COMBINED_NAME)
     written["counts"]["walls_combined"] = int(walls.GetNumberOfCells())
+
+    regions = _connected_regions(walls)
+    written["wall_regions"] = len(regions)
+    written["wall_region_surfaces"] = [
+        io.write_dataset(region, mesh_dir / WALLS_COMBINED_REGION_NAME.format(index=index))
+        for index, region in enumerate(regions)
+    ] if len(regions) > 1 else []
     return written
+
+
+def _connected_regions(surface):
+    """The connected pieces of a surface, as SimVascular splits a wall into."""
+    connectivity = vtk.vtkPolyDataConnectivityFilter()
+    connectivity.SetInputData(surface)
+    connectivity.SetExtractionModeToAllRegions()
+    connectivity.ColorRegionsOn()
+    connectivity.Update()
+    count = connectivity.GetNumberOfExtractedRegions()
+    if count <= 1:
+        return [surface]
+
+    # vtkPolyDataConnectivityFilter colours the points, not the cells. Every point of a
+    # cell is in the same region by construction, so the first one gives the cell's.
+    coloured = connectivity.GetOutput()
+    point_regions = vtk_to_numpy(coloured.GetPointData().GetArray("RegionId")).astype(np.int64)
+    cell_points = vtk.vtkIdList()
+    region_ids = np.empty(coloured.GetNumberOfCells(), dtype=np.int64)
+    for index in range(coloured.GetNumberOfCells()):
+        coloured.GetCellPoints(index, cell_points)
+        region_ids[index] = point_regions[cell_points.GetId(0)]
+
+    pieces = []
+    for index in range(count):
+        piece = cells.as_polydata(
+            cells.extract(coloured, np.flatnonzero(region_ids == index))
+        )
+        cells.keep_only(piece.GetCellData(), SOLVER_CELL_ARRAYS)
+        cells.keep_only(piece.GetPointData(), (NODE_ID_ARRAY,))
+        pieces.append(piece)
+    return pieces
 
 
 def _face_surface(exterior, cell_indices):
