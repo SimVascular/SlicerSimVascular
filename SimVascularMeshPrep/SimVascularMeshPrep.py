@@ -67,8 +67,10 @@ FACE_ID_ARRAY_PARAMETER = "FaceIdArrayNames"
 OUTPUT_DIRECTORY_PARAMETER = "OutputDirectory"
 INPUT_MESH_REFERENCE = "InputMesh"
 
-# The highlight's own node, kept out of the way of anything the operator has.
+# The highlight's own node, kept out of the way of anything the operator has, and the
+# colour it is drawn in: yellow against the grey the mesh sits at.
 HIGHLIGHT_NODE_NAME = "Mesh Prep face highlight"
+HIGHLIGHT_COLOR = (1.0, 1.0, 0.0)
 
 # What the mesh is left as when face colouring is turned off: the same neutral grey Clip
 # Vessel gives its output, rather than whatever colour the node happened to be created
@@ -582,7 +584,7 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
             display = node.GetDisplayNode()
             display.SetSaveWithScene(False)
             display.SetHideFromEditors(True)
-            display.SetColor(1.0, 0.35, 0.0)
+            display.SetColor(*HIGHLIGHT_COLOR)
             display.SetLineWidth(2)
         node.SetAndObserveMesh(face)
         node.GetDisplayNode().SetEdgeVisibility(showEdges)
@@ -653,6 +655,10 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         highlighted = logic.highlight(mesh, wall.face_id, "CellEntityIds", showEdges=True)
         self.assertEqual(highlighted.GetMesh().GetNumberOfCells(), wall.cell_count)
         self.assertTrue(highlighted.GetDisplayNode().GetEdgeVisibility())
+        self.assertEqual(
+            tuple(round(c, 2) for c in highlighted.GetDisplayNode().GetColor()),
+            HIGHLIGHT_COLOR,
+        )
         self.assertTrue(highlighted.GetHideFromEditors())
         self.assertFalse(highlighted.GetSaveWithScene())
 
