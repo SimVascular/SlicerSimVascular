@@ -44,6 +44,18 @@ the *input surface* already carried, which for a surface out of Clip Vessel can 
 same area, and its flatness. Selecting a row shows that face on its own in the 3D view.
 The `Name` column is the one to fill in.
 
+It works the other way round as well: **moving the cursor over the mesh in a 3D view shows
+whichever face is under it**, and **clicking selects that face's row**, scrolling the table
+to it if it is out of sight. Which is the direction the work actually goes in — a cap is
+something you are looking at before it is a row in a table.
+
+Hovering only shows; it leaves the selection alone, so the highlight goes back to the
+selected row when the cursor leaves the mesh. A click at the end of a camera drag is
+ignored, so rotating the view does not move the selection. The face under the cursor is
+found by where the pick landed rather than by the cell id it also reports: that id indexes
+the polydata the display pipeline built to draw the node, which for an unstructured grid
+is not the grid's own cells.
+
 **The names are saved with the scene**, in the module's parameter node, along with the face
 ids array and the output folder. Closing Slicer and opening the scene again brings them
 back with the mesh they belong to, and a remesh in the same scene keeps them: they are

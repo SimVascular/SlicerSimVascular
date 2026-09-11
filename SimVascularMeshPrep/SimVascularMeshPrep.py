@@ -111,6 +111,10 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         self._measured = []
         self._names = {}
         self._updating = False
+        self._lookup = None
+        self._hovered = None
+        self._pressedAt = None
+        self._viewObservers = []
 
     def setup(self):
         ScriptedLoadableModuleWidget.setup(self)
@@ -172,8 +176,15 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         self.updateButtons()
 
     def enter(self):
-        """Coming back to the panel after a scene was loaded elsewhere in the application."""
+        """Coming back to the panel, possibly after a scene was loaded elsewhere."""
         self.restoreFromParameterNode()
+        self.observeThreeDViews()
+
+    def exit(self):
+        """Leaving it. The views are let go of: moving the mouse over a 3D view while some
+        other module is open has nothing to do with this panel's table."""
+        self.stopObservingThreeDViews()
+        self._hovered = None
 
     def onSceneEndImport(self, caller=None, event=None):
         self.restoreFromParameterNode()
@@ -206,6 +217,10 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
                 self.ui.inputMeshSelector.setCurrentNode(mesh)
         finally:
             self._updating = False
+        self._lookup = None
+        self._hovered = None
+        self._pressedAt = None
+        self._viewObservers = []
         self.onMeshChanged()
 
     def saveToParameterNode(self):
@@ -231,12 +246,114 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
 
     def cleanup(self):
         self.clearHighlight()
+        self.stopObservingThreeDViews()
         self.removeObservers()
+
+    # -- picking a face in the 3D view --------------------------------------
+    def observeThreeDViews(self):
+        """Watch the 3D views for the cursor, so a face can be picked by looking at it.
+
+        Observers on the interactor rather than on the crosshair node: the crosshair
+        reports where the cursor is and this needs to know what is under it, which is a
+        pick. Nothing aborts the event, so the camera still rotates and zooms as it did.
+        """
+        self.stopObservingThreeDViews()
+        layoutManager = slicer.app.layoutManager()
+        if layoutManager is None:
+            return
+        for index in range(layoutManager.threeDViewCount):
+            view = layoutManager.threeDWidget(index).threeDView()
+            interactor = view.interactor()
+            for event, handler in (
+                (vtk.vtkCommand.MouseMoveEvent, self.onViewMouseMove),
+                (vtk.vtkCommand.LeftButtonPressEvent, self.onViewButtonPress),
+                (vtk.vtkCommand.LeftButtonReleaseEvent, self.onViewButtonRelease),
+            ):
+                tag = interactor.AddObserver(
+                    event, lambda caller, e, v=view, h=handler: h(v)
+                )
+                self._viewObservers.append((interactor, tag))
+
+    def stopObservingThreeDViews(self):
+        for interactor, tag in self._viewObservers:
+            interactor.RemoveObserver(tag)
+        self._viewObservers = []
+
+    def faceUnderCursor(self, view):
+        """The face id under the cursor in this view, or None."""
+        if self._lookup is None:
+            return None
+        node = self.ui.inputMeshSelector.currentNode()
+        if node is None:
+            return None
+        manager = view.displayableManagerByClassName("vtkMRMLModelDisplayableManager")
+        if manager is None:
+            return None
+        x, y = view.interactor().GetEventPosition()
+        if not manager.Pick(x, y):
+            return None
+        # Only the mesh itself and the face drawn on top of it count as the mesh: a pick
+        # landing on anything else in the scene is not a face of it.
+        picked = manager.GetPickedNodeID()
+        highlight = self.logic.highlightNode()
+        if picked not in (node.GetID(), highlight.GetID() if highlight else None):
+            return None
+        ras = [0.0, 0.0, 0.0]
+        manager.GetPickedRAS(ras)
+        return self.logic.faceAtPosition(self._lookup, ras, self.logic.pickTolerance(node))
+
+    def onViewMouseMove(self, view):
+        """Show whichever face the cursor is over, without disturbing the selection."""
+        faceId = self.faceUnderCursor(view)
+        if faceId == self._hovered:
+            return
+        self._hovered = faceId
+        if faceId is None:
+            # Back to the row that is selected, which is what the highlight otherwise says.
+            self.onSelectionChanged()
+            return
+        node = self.ui.inputMeshSelector.currentNode()
+        display = node.GetDisplayNode()
+        self.logic.highlight(
+            node.GetMesh(),
+            faceId,
+            self.ui.faceIdArrayLineEdit.text,
+            showEdges=bool(display and display.GetEdgeVisibility()),
+        )
+
+    def onViewButtonPress(self, view):
+        self._pressedAt = view.interactor().GetEventPosition()
+
+    def onViewButtonRelease(self, view):
+        """Select the face that was clicked -- but not at the end of a camera drag."""
+        pressedAt, self._pressedAt = self._pressedAt, None
+        released = view.interactor().GetEventPosition()
+        if pressedAt is None:
+            return
+        if abs(released[0] - pressedAt[0]) > 2 or abs(released[1] - pressedAt[1]) > 2:
+            return
+        faceId = self.faceUnderCursor(view)
+        if faceId is not None:
+            self.selectFace(faceId)
+
+    def selectFace(self, faceId):
+        """Select a face's row in the table, scrolling to it if it is out of sight."""
+        table = self.ui.facesTable
+        for row, face in enumerate(self._measured):
+            if face.face_id == faceId:
+                table.selectRow(row)
+                item = table.item(row, 0)
+                if item is not None:
+                    table.scrollToItem(item)
+                return True
+        return False
 
     # -- reading the mesh --------------------------------------------------
     def onMeshChanged(self, _node=None):
         """Measure the selected mesh's faces, keeping any names already typed."""
         self._measured = []
+        self._lookup = None
+        self._hovered = None
         node = self.ui.inputMeshSelector.currentNode()
         mesh = node.GetMesh() if node else None
         if mesh is None:
@@ -255,6 +372,8 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
             self.populateTable()
             return
 
+        arrayName = self.logic.faceIdArrayName(mesh, self.ui.faceIdArrayLineEdit.text)
+        self._lookup = self.logic.faceLookup(mesh, arrayName) if arrayName else None
         for face in self._measured:
             self._names.setdefault(face.face_id, "")
         self.populateTable()
@@ -299,6 +418,10 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
                     table.setItem(row, column, item)
         finally:
             self._updating = False
+        self._lookup = None
+        self._hovered = None
+        self._pressedAt = None
+        self._viewObservers = []
         self.updateButtons()
 
     # -- naming ------------------------------------------------------------
@@ -534,6 +657,49 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
         )
 
     @staticmethod
+    def pickTolerance(node):
+        """How far from the boundary a picked point may be and still be on a face.
+
+        A pick that landed on this mesh is on its surface, so this only has to absorb the
+        picker's own rounding -- but it is taken from the mesh's size rather than written
+        down, so that it means the same on a coronary as on a whole thorax.
+        """
+        bounds = [0.0] * 6
+        node.GetRASBounds(bounds)
+        diagonal = sum((bounds[i * 2 + 1] - bounds[i * 2]) ** 2 for i in range(3)) ** 0.5
+        return max(diagonal * 0.01, 1e-6)
+
+    @staticmethod
+    def faceLookup(mesh, arrayName):
+        """What is needed to answer "which face is at this point": the boundary, its face
+        ids, and a locator over it.
+
+        The position is used rather than the cell id a pick also returns, because that id
+        indexes the polydata the display pipeline built to draw the node -- for an
+        unstructured grid, not the grid's own cells -- and the mapping back is not ours to
+        rely on. A point is a point.
+        """
+        boundary = faces.boundary_of(mesh)
+        ids = vtk_to_numpy(boundary.GetCellData().GetArray(arrayName)).astype(np.int64)
+        locator = vtk.vtkStaticCellLocator()
+        locator.SetDataSet(boundary)
+        locator.BuildLocator()
+        return boundary, ids, locator
+
+    @staticmethod
+    def faceAtPosition(lookup, position, tolerance):
+        """The face id of the boundary cell nearest a point, or None if none is near it."""
+        boundary, ids, locator = lookup
+        closest = [0.0, 0.0, 0.0]
+        cellId = vtk.reference(0)
+        subId = vtk.reference(0)
+        distance2 = vtk.reference(0.0)
+        locator.FindClosestPoint(list(position), closest, cellId, subId, distance2)
+        if int(cellId) < 0 or float(distance2) > tolerance * tolerance:
+            return None
+        return int(ids[int(cellId)])
+
+    @staticmethod
     def statusText(measured, names):
         """How many faces there are and how many are still to name."""
         if not measured:
@@ -704,6 +870,18 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
 
         logic.clearHighlight()
         self.assertIsNone(logic.highlightNode())
+
+        # Picking a face by where it is, which is what hovering over one comes down to.
+        lookup = logic.faceLookup(mesh, "CellEntityIds")
+        node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", "for picking")
+        node.SetAndObserveMesh(mesh)
+        tolerance = logic.pickTolerance(node)
+        caps = [face for face in measured if face is not wall]
+        for face in caps:
+            self.assertEqual(logic.faceAtPosition(lookup, face.centroid, tolerance), face.face_id)
+        # Nothing is under a point away from the mesh, and the wall's own centroid is
+        # inside the lumen rather than on it.
+        self.assertIsNone(logic.faceAtPosition(lookup, (0.5, 0.5, 50.0), tolerance))
 
         # A scene with nowhere to write to suggests nowhere, rather than Documents.
         self.assertEqual(logic.suggestedOutputDirectory(), "")
