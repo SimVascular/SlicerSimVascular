@@ -19,6 +19,7 @@ set(MODULE_PYTHON_SCRIPTS
   )
 
 set(MODULE_PYTHON_RESOURCES
+  Resources/Icons/ToggleEdges.svg
   Resources/Icons/ToggleFaceColors.svg
   Resources/Icons/ToggleTransparency.svg
   Resources/UI/${MODULE_NAME}.ui

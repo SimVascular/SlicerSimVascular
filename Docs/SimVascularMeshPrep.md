@@ -27,11 +27,11 @@ translation is a step of its own.
 
 ## The panel
 
-**Mesh** — the volume mesh node, and which cell array its face ids are in. Three buttons
-beside the selector, for seeing a cap that sits inside the anatomy: **show or hide** the
-mesh, **colour it by its face ids** so every face can be told from its neighbours at once
-(turning that off leaves it a neutral grey rather than whatever colour the node was
-created with), and make it **half transparent**. None of them is checkable — a mark would be saying what
+**Mesh** — the volume mesh node, and which cell array its face ids are in. Four buttons
+beside the selector, for seeing a cap that sits inside the anatomy: **edges** on or off,
+**colour by face ids** so every face can be told from its neighbours at once (turning that
+off leaves the mesh a slightly see-through neutral grey rather than whatever colour its
+node was created with), **transparency**, and **show or hide**. None of them is checkable — a mark would be saying what
 the display node holds, and nothing tells the panel when that changes elsewhere, so it
 would sooner or later contradict the scene. Each reads the state at the moment it is
 pressed and turns it around. *Face ids
@@ -44,6 +44,11 @@ the *input surface* already carried, which for a surface out of Clip Vessel can 
 **Faces** — a row per face, with its cell count, area, the diameter of the circle of the
 same area, and its flatness. Selecting a row shows that face on its own in the 3D view.
 The `Name` column is the one to fill in.
+
+**The names are saved with the scene**, in the module's parameter node, so closing Slicer
+and opening the scene again brings them back along with the mesh they belong to. So is the
+face ids array and the output folder. Nothing has to be exported first for the naming to
+survive.
 
 **Load names…** reads a `face_table.csv` an earlier export wrote: the names are matched to
 faces by id and the faces are remeasured against the mesh now selected. That is what makes

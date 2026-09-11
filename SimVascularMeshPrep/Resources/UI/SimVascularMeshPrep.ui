@@ -48,6 +48,22 @@
        </widget>
         </item>
         <item>
+         <widget class="QToolButton" name="meshEdgesButton">
+          <property name="toolTip">
+           <string>Show or hide the edges of the mesh cells. Pressing again turns them off.</string>
+          </property>
+          <property name="text">
+           <string/>
+          </property>
+          <property name="toolButtonStyle">
+           <enum>Qt::ToolButtonIconOnly</enum>
+          </property>
+          <property name="autoRaise">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
          <widget class="QToolButton" name="meshColorsButton">
           <property name="toolTip">
            <string>Colour the mesh by its face ids, so that every face can be told from its neighbours at once. Pressing again turns it off.</string>

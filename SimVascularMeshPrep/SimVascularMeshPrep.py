@@ -34,6 +34,8 @@ boundary condition says, and nothing downstream will notice.
 """
 
 import csv
+import json
+import logging
 import os
 
 import numpy as np
@@ -57,13 +59,26 @@ from svmeshcomplete import cells, face_table, faces, mesh_complete
 COLUMNS = ("Face", "Name", "Cells", "Area", "Diameter", "Flatness")
 NAME_COLUMN = COLUMNS.index("Name")
 
+# Where the panel's state is kept so that it is saved with the scene, which is what makes
+# the naming survive closing Slicer. The names are the expensive part -- twenty-odd caps
+# matched to vessels by eye -- and a scene that came back without them would be a scene
+# whose mesh had to be named again.
+NAMES_PARAMETER = "FaceNames"
+FACE_ID_ARRAY_PARAMETER = "FaceIdArrayNames"
+OUTPUT_DIRECTORY_PARAMETER = "OutputDirectory"
+INPUT_MESH_REFERENCE = "InputMesh"
+
 # The highlight's own node, kept out of the way of anything the operator has.
 HIGHLIGHT_NODE_NAME = "Mesh Prep face highlight"
 
-# What the mesh is left as when face colouring is turned off. The same neutral grey Clip
+# What the mesh is left as when face colouring is turned off: the same neutral grey Clip
 # Vessel gives its output, rather than whatever colour the node happened to be created
-# with, which for a mesher's output is arbitrary.
+# with, and see-through enough to find a cap behind it without reaching for a button.
 SOLID_COLOR = (0.75, 0.75, 0.75)
+SOLID_OPACITY = 0.8
+
+# What the transparency button drops to, and comes back from.
+TRANSPARENT_OPACITY = 0.4
 
 
 class SimVascularMeshPrep(ScriptedLoadableModule):
@@ -118,12 +133,14 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         # at the moment it is pressed and turns it around.
         rowHeight = self.ui.inputMeshSelector.sizeHint.height()
         buttons = (
-            (self.ui.meshVisibilityButton, ":/Icons/Medium/SlicerVisibleInvisible.png",
-             self.onToggleVisibility),
+            (self.ui.meshEdgesButton, self.resourcePath("Icons/ToggleEdges.svg"),
+             self.onToggleEdges),
             (self.ui.meshColorsButton, self.resourcePath("Icons/ToggleFaceColors.svg"),
              self.onToggleFaceColors),
             (self.ui.meshTransparencyButton, self.resourcePath("Icons/ToggleTransparency.svg"),
              self.onToggleTransparency),
+            (self.ui.meshVisibilityButton, ":/Icons/Medium/SlicerVisibleInvisible.png",
+             self.onToggleVisibility),
         )
         for button, icon, handler in buttons:
             button.setIcon(qt.QIcon(icon))
@@ -138,8 +155,79 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         self.ui.facesTable.connect("cellChanged(int,int)", self.onNameEdited)
         self.ui.loadNamesButton.connect("clicked(bool)", self.onLoadNames)
         self.ui.exportButton.connect("clicked(bool)", self.onExport)
+        self.ui.outputDirectoryPathLineEdit.connect(
+            "currentPathChanged(QString)", self.onOutputDirectoryChanged
+        )
 
+        # A scene being loaded replaces the parameter node, so the panel has to read itself
+        # back out of the new one rather than trust what it is showing.
+        self.addObserver(
+            slicer.mrmlScene, slicer.mrmlScene.EndImportEvent, self.onSceneEndImport
+        )
+        self.addObserver(
+            slicer.mrmlScene, slicer.mrmlScene.EndCloseEvent, self.onSceneEndClose
+        )
+
+        self.restoreFromParameterNode()
         self.updateButtons()
+
+    def enter(self):
+        """Coming back to the panel after a scene was loaded elsewhere in the application."""
+        self.restoreFromParameterNode()
+
+    def onSceneEndImport(self, caller=None, event=None):
+        self.restoreFromParameterNode()
+
+    def onSceneEndClose(self, caller=None, event=None):
+        self._measured = []
+        self._names = {}
+        self.populateTable()
+
+    # -- state that is saved with the scene ---------------------------------
+    def parameterNode(self):
+        return self.logic.getParameterNode()
+
+    def restoreFromParameterNode(self):
+        """Put the panel back the way the scene left it."""
+        node = self.parameterNode()
+        if node is None:
+            return
+        self._updating = True
+        try:
+            self._names = self.logic.readNamesParameter(node.GetParameter(NAMES_PARAMETER))
+            arrayNames = node.GetParameter(FACE_ID_ARRAY_PARAMETER)
+            if arrayNames:
+                self.ui.faceIdArrayLineEdit.text = arrayNames
+            directory = node.GetParameter(OUTPUT_DIRECTORY_PARAMETER)
+            if directory:
+                self.ui.outputDirectoryPathLineEdit.currentPath = directory
+            mesh = node.GetNodeReference(INPUT_MESH_REFERENCE)
+            if mesh is not None:
+                self.ui.inputMeshSelector.setCurrentNode(mesh)
+        finally:
+            self._updating = False
+        self.onMeshChanged()
+
+    def saveToParameterNode(self):
+        node = self.parameterNode()
+        if node is None:
+            return
+        was_modifying = node.StartModify()
+        node.SetParameter(NAMES_PARAMETER, self.logic.writeNamesParameter(self._names))
+        node.SetParameter(FACE_ID_ARRAY_PARAMETER, self.ui.faceIdArrayLineEdit.text)
+        node.SetParameter(
+            OUTPUT_DIRECTORY_PARAMETER, self.ui.outputDirectoryPathLineEdit.currentPath or ""
+        )
+        node.SetNodeReferenceID(
+            INPUT_MESH_REFERENCE,
+            self.ui.inputMeshSelector.currentNodeID or None,
+        )
+        node.EndModify(was_modifying)
+
+    def onOutputDirectoryChanged(self, *_args):
+        if not self._updating:
+            self.saveToParameterNode()
+            self.updateButtons()
 
     def cleanup(self):
         self.clearHighlight()
@@ -170,6 +258,7 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         for face in self._measured:
             self._names.setdefault(face.face_id, "")
         self.populateTable()
+        self.saveToParameterNode()
         self.setStatus(
             _("{count} faces. {unnamed} still to name.").format(
                 count=len(self._measured),
@@ -223,6 +312,7 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
             return
         item = self.ui.facesTable.item(row, column)
         self._names[self._measured[row].face_id] = (item.text() or "").strip()
+        self.saveToParameterNode()
         self.updateButtons()
 
     def selectedFace(self):
@@ -258,6 +348,11 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         if display is not None:
             display.SetVisibility(not display.GetVisibility())
 
+    def onToggleEdges(self):
+        display = self.meshDisplayNode()
+        if display is not None:
+            display.SetEdgeVisibility(not display.GetEdgeVisibility())
+
     def onToggleFaceColors(self):
         display = self.meshDisplayNode()
         node = self.ui.inputMeshSelector.currentNode()
@@ -277,10 +372,16 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         self.logic.colourByFaceIds(display, arrayName)
 
     def onToggleTransparency(self):
+        """Between see-through and the mesh's own opacity, not between that and opaque.
+
+        The grey the mesh sits at is already a little transparent, so testing against 1.0
+        would make this button turn transparency *off* the first time it is pressed.
+        """
         display = self.meshDisplayNode()
         if display is None:
             return
-        display.SetOpacity(1.0 if display.GetOpacity() < 1.0 else 0.5)
+        transparent = display.GetOpacity() <= TRANSPARENT_OPACITY
+        display.SetOpacity(SOLID_OPACITY if transparent else TRANSPARENT_OPACITY)
 
     # -- names from an earlier export --------------------------------------
     def onLoadNames(self):
@@ -299,6 +400,7 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         unknown = sorted(set(names) - {face.face_id for face in self._measured})
         self._names.update(names)
         self.populateTable()
+        self.saveToParameterNode()
         message = _("Read {count} names from {name}.").format(
             count=len(names), name=os.path.basename(path)
         )
@@ -401,6 +503,29 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
         return os.path.join(sceneDirectory, "mesh")
 
     @staticmethod
+    def writeNamesParameter(names):
+        """The names as one string, for a parameter node to carry into a saved scene."""
+        return json.dumps({str(face_id): name for face_id, name in sorted(names.items())})
+
+    @staticmethod
+    def readNamesParameter(text):
+        """The names back out, and nothing at all rather than an exception from a bad one."""
+        if not text:
+            return {}
+        try:
+            stored = json.loads(text)
+        except ValueError:
+            logging.warning("Mesh Prep could not read the face names saved with this scene.")
+            return {}
+        names = {}
+        for face_id, name in stored.items():
+            try:
+                names[int(face_id)] = str(name)
+            except (TypeError, ValueError):
+                continue
+        return names
+
+    @staticmethod
     def readNames(path):
         """`{face id: name}` out of a face table, whether or not every row is filled in."""
         with open(path, newline="") as handle:
@@ -466,9 +591,10 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
 
     @staticmethod
     def showSolidColor(display):
-        """Turn face colouring off, leaving the mesh a neutral grey."""
+        """Turn face colouring off, leaving the mesh a slightly see-through neutral grey."""
         display.SetScalarVisibility(False)
         display.SetColor(*SOLID_COLOR)
+        display.SetOpacity(SOLID_OPACITY)
 
     @staticmethod
     def colourByFaceIds(display, arrayName):
@@ -529,6 +655,8 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
     def runTest(self):
         self.setUp()
         self.test_measureNamesAndExports()
+        self.setUp()
+        self.test_namesSurviveASavedScene()
 
     def test_measureNamesAndExports(self):
         import tempfile
@@ -574,7 +702,51 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         logic.showSolidColor(display)
         self.assertFalse(display.GetScalarVisibility())
         self.assertEqual(tuple(round(c, 2) for c in display.GetColor()), SOLID_COLOR)
-        display.SetOpacity(0.5)
-        self.assertAlmostEqual(display.GetOpacity(), 0.5)
+        self.assertAlmostEqual(display.GetOpacity(), SOLID_OPACITY)
+
+        display.SetEdgeVisibility(not display.GetEdgeVisibility())
+        self.assertTrue(display.GetEdgeVisibility())
 
         self.delayDisplay("Measured, named, exported, highlighted and coloured")
+
+    def test_namesSurviveASavedScene(self):
+        """The naming is the expensive part, so it has to come back with the scene."""
+        import tempfile
+
+        from svmeshcomplete import testing
+
+        logic = SimVascularMeshPrepLogic()
+        names = {1: "wall", 2: "cap_RSVC", 3: "cap_lpa_a"}
+
+        mesh = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", "volume mesh")
+        mesh.SetAndObserveMesh(testing.cube_mesh())
+
+        parameters = logic.getParameterNode()
+        parameters.SetParameter(NAMES_PARAMETER, logic.writeNamesParameter(names))
+        parameters.SetParameter(FACE_ID_ARRAY_PARAMETER, "CellEntityIds, ModelFaceID")
+        parameters.SetNodeReferenceID(INPUT_MESH_REFERENCE, mesh.GetID())
+
+        scene = os.path.join(tempfile.mkdtemp(), "scene.mrb")
+        self.assertTrue(slicer.util.saveScene(scene))
+
+        # Clear(1) removes the singletons too, so this looks like a fresh application
+        # rather than one that still had the parameter node in it.
+        slicer.mrmlScene.Clear(1)
+        self.assertEqual(
+            logic.readNamesParameter(logic.getParameterNode().GetParameter(NAMES_PARAMETER)), {}
+        )
+
+        self.assertTrue(slicer.util.loadScene(scene))
+        restored = logic.getParameterNode()
+        self.assertEqual(
+            logic.readNamesParameter(restored.GetParameter(NAMES_PARAMETER)), names
+        )
+        self.assertEqual(
+            restored.GetParameter(FACE_ID_ARRAY_PARAMETER), "CellEntityIds, ModelFaceID"
+        )
+        self.assertIsNotNone(restored.GetNodeReference(INPUT_MESH_REFERENCE))
+
+        # A parameter that is not readable loses the names rather than the panel.
+        self.assertEqual(logic.readNamesParameter("not json"), {})
+
+        self.delayDisplay("Names survived a saved scene")
