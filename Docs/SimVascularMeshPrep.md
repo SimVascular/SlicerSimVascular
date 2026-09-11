@@ -51,8 +51,13 @@ matched to faces by id, so only the measurements change. That is the whole of ho
 naming persists — there is no file beside the mesh to keep in step with it, and anything
 outside Slicer that needs the names reads them out of the scene.
 
-**Export** — writes the folder. The button stays disabled until every face has a name,
-because a face without one has no boundary condition to bind to.
+**Export** — writes the folder. The button stays disabled until every face has a name and
+there is somewhere to write to, because a face without a name has no boundary condition to
+bind to. The folder defaults to `mesh` beside the scene file, which is where a case wants
+it, and to nothing at all for a scene that has never been saved.
+
+The line under the panel says how many faces there are and how many are still to name, and
+follows every name typed.
 
 ## Naming the faces
 

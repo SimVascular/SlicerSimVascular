@@ -259,14 +259,9 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
             self._names.setdefault(face.face_id, "")
         self.populateTable()
         self.saveToParameterNode()
-        self.setStatus(
-            _("{count} faces. {unnamed} still to name.").format(
-                count=len(self._measured),
-                unnamed=sum(1 for face in self._measured if not self._names.get(face.face_id)),
-            )
-        )
+        self.updateStatus()
         if not self.ui.outputDirectoryPathLineEdit.currentPath:
-            self.ui.outputDirectoryPathLineEdit.currentPath = self.logic.suggestedOutputDirectory(node)
+            self.ui.outputDirectoryPathLineEdit.currentPath = self.logic.suggestedOutputDirectory()
 
     def populateTable(self):
         table = self.ui.facesTable
@@ -313,6 +308,7 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         item = self.ui.facesTable.item(row, column)
         self._names[self._measured[row].face_id] = (item.text() or "").strip()
         self.saveToParameterNode()
+        self.updateStatus()
         self.updateButtons()
 
     def selectedFace(self):
@@ -433,6 +429,14 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
                    "condition names, so a face without one has nothing to bind to.")
         )
 
+    def updateStatus(self):
+        """What is left to do, which changes with every name typed.
+
+        Not folded into updateButtons: that also runs when the output folder changes, and
+        it would wipe out what an export had just reported.
+        """
+        self.setStatus(self.logic.statusText(self._measured, self._names))
+
     def setStatus(self, text, warning=False):
         self.ui.statusLabel.text = text
         self.ui.statusLabel.styleSheet = "QLabel { color: #d08000; }" if warning else ""
@@ -475,12 +479,17 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
         return not isWall and face.flatness > cls.FLATNESS_TOLERANCE
 
     @staticmethod
-    def suggestedOutputDirectory(node):
-        """The `mesh` folder beside wherever the node's scene was saved, if anywhere."""
-        sceneDirectory = slicer.mrmlScene.GetRootDirectory()
-        if not sceneDirectory or not os.path.isdir(sceneDirectory):
-            return ""
-        return os.path.join(sceneDirectory, "mesh")
+    def suggestedOutputDirectory():
+        """`mesh` beside the scene file, once the scene has one.
+
+        Nothing is suggested for a scene that has never been saved. `GetRootDirectory`
+        answers even then -- with Slicer's default, the user's Documents folder -- and a
+        mesh-complete folder written there is not where anyone wanted it, least of all
+        with Export enabled and looking ready.
+        """
+        url = slicer.mrmlScene.GetURL()
+        directory = os.path.dirname(url) if url else ""
+        return os.path.join(directory, "mesh") if os.path.isdir(directory) else ""
 
     @staticmethod
     def writeNamesParameter(names):
@@ -522,6 +531,18 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
         arrayName = self.faceIdArrayName(mesh, faceIdArrayNames)
         return mesh_complete.write_mesh_complete(
             mesh, table, directory, face_id_array_name=arrayName
+        )
+
+    @staticmethod
+    def statusText(measured, names):
+        """How many faces there are and how many are still to name."""
+        if not measured:
+            return ""
+        unnamed = sum(1 for face in measured if not names.get(face.face_id))
+        if not unnamed:
+            return _("{count} faces, all named.").format(count=len(measured))
+        return _("{count} faces. {unnamed} still to name.").format(
+            count=len(measured), unnamed=unnamed
         )
 
     @staticmethod
@@ -683,6 +704,18 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
 
         logic.clearHighlight()
         self.assertIsNone(logic.highlightNode())
+
+        # A scene with nowhere to write to suggests nowhere, rather than Documents.
+        self.assertEqual(logic.suggestedOutputDirectory(), "")
+
+        # The count has to follow the naming: it is read after every name typed.
+        self.assertEqual(logic.statusText([], {}), "")
+        self.assertIn("3 still to name", logic.statusText(measured, {}))
+        partly = {wall.face_id: "wall"}
+        self.assertIn("2 still to name", logic.statusText(measured, partly))
+        blank = dict(names, **{wall.face_id: ""})
+        self.assertIn("1 still to name", logic.statusText(measured, blank))
+        self.assertIn("all named", logic.statusText(measured, names))
 
         # The three display toggles, each reading the state it is turning around.
         node.CreateDefaultDisplayNodes()
