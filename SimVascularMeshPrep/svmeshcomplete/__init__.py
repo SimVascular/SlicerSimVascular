@@ -21,7 +21,8 @@ Three things it will not do quietly:
 `faces.measure_faces` is the other half: area, effective diameter, centroid and flatness
 per face, which is how a cap gets matched to a vessel and how a cut that was not planar
 is spotted. `face_table.FaceTable` is the naming those measurements inform -- the names
-become the file names, and through them the solver's `Add_face` and `Add_BC` names.
+become the file names, and through them the solver's `Add_face` and `Add_BC` names. Where
+a host *keeps* those names is its own business; this only validates them.
 
 Nothing here imports `slicer`, `sv` or VMTK: it is VTK and numpy, so it runs under
 Slicer's Python and outside it, and its tests need neither.
@@ -34,9 +35,6 @@ from svmeshcomplete.face_table import (
     Face,
     FaceTable,
     FaceTableError,
-    read_clip_vessel_table,
-    starter_rows,
-    write_starter_table,
 )
 from svmeshcomplete.faces import (
     FACE_ID_ARRAY_NAMES,
@@ -76,10 +74,7 @@ __all__ = [
     "boundary_of",
     "find_face_id_array",
     "measure_faces",
-    "read_clip_vessel_table",
     "read_dataset",
-    "starter_rows",
     "write_dataset",
     "write_mesh_complete",
-    "write_starter_table",
 ]

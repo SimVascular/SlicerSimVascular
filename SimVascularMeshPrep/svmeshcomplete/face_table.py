@@ -1,27 +1,27 @@
 """Which face id is which vessel, and what the solver calls it.
 
-Clip Vessel labels the faces it cuts `Wall`, `Inlet`, `Outlet 1` ... `Outlet 22` and
-writes that table beside the model as `Clip Vessel face colors.csv`. Those names are
-positional, so a Fontan case cannot be set up from them: the operator has to say which
-cap is the azygous vein and which is `lpa_f`. That mapping is `geometry/face_table.csv`,
-and the names in it become the `mesh-surfaces/` file names and through them the
-`Add_face` and `Add_BC` names in solver.xml.
+A mesher's face ids are numbers, and Clip Vessel's labels for them are positional --
+`Outlet 14` is the fourteenth boundary it happened to find. A case cannot be set up from
+either: the boundary conditions differ per vessel, one inflow waveform per systemic vein
+and a resistance per pulmonary branch, so somebody has to say which cap is the azygous
+vein. This is that mapping, validated.
 
-Convention `mesh_complete` and `solver_xml` both rely on: `cap_*` is a face flow crosses,
-one boundary condition each; `wall` or `wall_*` is vessel wall, merged into
-`walls_combined.vtp`.
+The names become the `mesh-surfaces/` file names and through them the solver's `Add_face`
+and `Add_BC` names, so they are what results come back labelled with.
+
+Convention `mesh_complete` relies on: `cap_*` is a face flow crosses, one boundary
+condition each; `wall` or `wall_*` is vessel wall, merged into `walls_combined.vtp`.
+
+Where the names are *kept* is the host's business, not this module's. The Mesh Prep panel
+keeps them in the scene it was named in.
 """
 
 from __future__ import annotations
 
-import csv
-import re
 from dataclasses import dataclass
-from pathlib import Path
 
 CAP_PREFIX = "cap_"
 WALL_PREFIX = "wall_"
-FIELDNAMES = ("FaceID", "ClipVesselName", "Name")
 
 
 class FaceTableError(ValueError):
@@ -32,7 +32,6 @@ class FaceTableError(ValueError):
 class Face:
     face_id: int
     name: str
-    clip_vessel_name: str = ""
 
     @property
     def is_cap(self) -> bool:
@@ -98,114 +97,3 @@ class FaceTable:
                 f"Face id {face_id} is not in the table, which has "
                 f"{sorted(self.names_by_id())}."
             ) from None
-
-    @classmethod
-    def read(cls, path: str | Path) -> "FaceTable":
-        path = Path(path)
-        if not path.is_file():
-            raise FaceTableError(f"No face table at {path}")
-        faces = []
-        with path.open(newline="") as handle:
-            reader = csv.DictReader(handle)
-            missing = {"FaceID", "Name"} - set(reader.fieldnames or ())
-            if missing:
-                raise FaceTableError(
-                    f"{path} has no {sorted(missing)} column; it needs {list(FIELDNAMES)}"
-                )
-            for line, row in enumerate(reader, start=2):
-                raw_id = (row.get("FaceID") or "").strip()
-                name = (row.get("Name") or "").strip()
-                if not raw_id:
-                    continue
-                if not name:
-                    raise FaceTableError(
-                        f"{path} line {line}: face {raw_id} has no name. Naming every "
-                        "face is what this file is for."
-                    )
-                try:
-                    face_id = int(raw_id)
-                except ValueError:
-                    raise FaceTableError(
-                        f"{path} line {line}: FaceID {raw_id!r} is not an integer"
-                    ) from None
-                faces.append(
-                    Face(face_id, name, (row.get("ClipVesselName") or "").strip())
-                )
-        if not faces:
-            raise FaceTableError(f"{path} names no faces")
-        return cls(faces)
-
-    def write(self, path: str | Path) -> Path:
-        return _write_rows(
-            path,
-            [
-                {
-                    "FaceID": str(face.face_id),
-                    "ClipVesselName": face.clip_vessel_name,
-                    "Name": face.name,
-                }
-                for face in self.faces
-            ],
-        )
-
-
-def read_clip_vessel_table(path: str | Path) -> dict[int, str]:
-    """Clip Vessel's colour table (`LabelValue,Name,Color_R,...`) as `{face id: label}`."""
-    path = Path(path)
-    if not path.is_file():
-        raise FaceTableError(f"No Clip Vessel face table at {path}")
-    labels: dict[int, str] = {}
-    with path.open(newline="") as handle:
-        reader = csv.DictReader(handle)
-        if not {"LabelValue", "Name"} <= set(reader.fieldnames or ()):
-            raise FaceTableError(
-                f"{path} has no LabelValue/Name columns, so it is not the Slicer colour "
-                "table Clip Vessel writes as 'Clip Vessel face colors.csv'."
-            )
-        for row in reader:
-            raw_id = (row.get("LabelValue") or "").strip()
-            label = (row.get("Name") or "").strip()
-            if raw_id and label:
-                labels[int(raw_id)] = label
-    if not labels:
-        raise FaceTableError(f"{path} names no faces")
-    return labels
-
-
-def starter_rows(clip_vessel_labels: dict[int, str]) -> list[dict[str, str]]:
-    """Rows for a `face_table.csv` to be filled in by hand.
-
-    A wall is named outright; every other face is guessed at as `cap_<label>`, which is a
-    placeholder -- `cap_outlet_14` is a name no result should be read under.
-    """
-    rows = []
-    for face_id in sorted(clip_vessel_labels):
-        label = clip_vessel_labels[face_id]
-        slug = re.sub(r"[^0-9a-zA-Z]+", "_", label).strip("_").lower()
-        # `Outlet 2` -> `outlet_02`: face names get sorted, and unpadded numbers sort
-        # `outlet_14` before `outlet_2`.
-        trailing_number = re.fullmatch(r"(.*?)_(\d+)", slug)
-        if trailing_number:
-            slug = f"{trailing_number.group(1)}_{int(trailing_number.group(2)):02d}"
-        if slug == "wall":
-            name = "wall"
-        elif slug.startswith("wall"):
-            name = f"{WALL_PREFIX}{slug[4:].strip('_')}"
-        else:
-            name = f"{CAP_PREFIX}{slug}"
-        rows.append({"FaceID": str(face_id), "ClipVesselName": label, "Name": name})
-    return rows
-
-
-def write_starter_table(clip_vessel_labels: dict[int, str], path: str | Path) -> Path:
-    return _write_rows(path, starter_rows(clip_vessel_labels))
-
-
-def _write_rows(path: str | Path, rows) -> Path:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=FIELDNAMES)
-        writer.writeheader()
-        writer.writerows(rows)
-    return path

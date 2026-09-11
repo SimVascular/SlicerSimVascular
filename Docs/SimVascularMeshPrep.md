@@ -16,7 +16,6 @@ mesh/
   mesh-complete.exterior.vtp    every boundary cell, with ModelFaceID
   walls_combined.vtp            the wall faces merged, for the no-slip condition
   mesh-surfaces/cap_RSVC.vtp    one file per named face
-  face_table.csv                the names, to load again after a remesh
 ```
 
 `GlobalNodeID` is how a boundary condition is bound to the volume: each face file carries,
@@ -45,22 +44,15 @@ the *input surface* already carried, which for a surface out of Clip Vessel can 
 same area, and its flatness. Selecting a row shows that face on its own in the 3D view.
 The `Name` column is the one to fill in.
 
-**The names are saved with the scene**, in the module's parameter node, so closing Slicer
-and opening the scene again brings them back along with the mesh they belong to. So is the
-face ids array and the output folder. Nothing has to be exported first for the naming to
-survive.
+**The names are saved with the scene**, in the module's parameter node, along with the face
+ids array and the output folder. Closing Slicer and opening the scene again brings them
+back with the mesh they belong to, and a remesh in the same scene keeps them: they are
+matched to faces by id, so only the measurements change. That is the whole of how the
+naming persists — there is no file beside the mesh to keep in step with it, and anything
+outside Slicer that needs the names reads them out of the scene.
 
-**Load names…** reads a `face_table.csv` an earlier export wrote: the names are matched to
-faces by id and the faces are remeasured against the mesh now selected. That is what makes
-a remesh cheap — it does not cost the naming, which on twenty-odd caps is the expensive
-part.
-
-**Export** — writes the folder, `face_table.csv` included. The names are the one part of
-that folder that was a decision rather than a calculation, so they go in it: a folder
-without them cannot be rebuilt after a remesh without doing the naming again, and the
-command line tools read that same file, so a case exported here can be packaged by a
-script. The button stays disabled until every face has a name, because a face without one
-has no boundary condition to bind to.
+**Export** — writes the folder. The button stays disabled until every face has a name,
+because a face without one has no boundary condition to bind to.
 
 ## Naming the faces
 

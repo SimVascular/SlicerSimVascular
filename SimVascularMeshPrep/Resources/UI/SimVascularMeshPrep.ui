@@ -171,33 +171,6 @@
         </property>
        </widget>
       </item>
-      <item>
-       <layout class="QHBoxLayout" name="highlightHorizontalLayout">
-        <item>
-         <spacer name="highlightSpacer">
-          <property name="orientation">
-           <enum>Qt::Horizontal</enum>
-          </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>40</width>
-            <height>20</height>
-           </size>
-          </property>
-         </spacer>
-        </item>
-        <item>
-         <widget class="QPushButton" name="loadNamesButton">
-          <property name="toolTip">
-           <string>Read names from a face_table.csv an earlier export wrote. The names are matched to faces by id and the faces are remeasured against the mesh now selected, which is what makes a remesh cheap: it does not cost the naming.</string>
-          </property>
-          <property name="text">
-           <string>Load names…</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
      </layout>
     </widget>
    </item>
@@ -210,7 +183,7 @@
       <item>
        <widget class="QLabel" name="exportHelpLabel">
         <property name="text">
-         <string>Writes mesh-complete.mesh.vtu, mesh-complete.exterior.vtp, walls_combined.vtp, one mesh-surfaces file per face, and the face_table.csv recording the names, into the folder below. Every path in solver.xml is resolved relative to the directory a job runs in, so this is normally the mesh folder of a case.</string>
+         <string>Writes mesh-complete.mesh.vtu, mesh-complete.exterior.vtp, walls_combined.vtp and one mesh-surfaces file per face into the folder below. The names are not written with it: they are saved with the scene, which is where anything needing them reads them from. Every path in solver.xml is resolved relative to the directory a job runs in, so this is normally the mesh folder of a case.</string>
         </property>
         <property name="wordWrap">
          <bool>true</bool>

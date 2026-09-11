@@ -33,7 +33,6 @@ was not cut cleanly does not. The flow crossing a cap that is not planar is not 
 boundary condition says, and nothing downstream will notice.
 """
 
-import csv
 import json
 import logging
 import os
@@ -153,7 +152,6 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         self.ui.faceIdArrayLineEdit.connect("editingFinished()", self.onMeshChanged)
         self.ui.facesTable.connect("itemSelectionChanged()", self.onSelectionChanged)
         self.ui.facesTable.connect("cellChanged(int,int)", self.onNameEdited)
-        self.ui.loadNamesButton.connect("clicked(bool)", self.onLoadNames)
         self.ui.exportButton.connect("clicked(bool)", self.onExport)
         self.ui.outputDirectoryPathLineEdit.connect(
             "currentPathChanged(QString)", self.onOutputDirectoryChanged
@@ -329,7 +327,13 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         if face is None or node is None or node.GetMesh() is None:
             self.clearHighlight()
             return
-        self.logic.highlight(node.GetMesh(), face.face_id, self.ui.faceIdArrayLineEdit.text)
+        display = node.GetDisplayNode()
+        self.logic.highlight(
+            node.GetMesh(),
+            face.face_id,
+            self.ui.faceIdArrayLineEdit.text,
+            showEdges=bool(display and display.GetEdgeVisibility()),
+        )
 
     def clearHighlight(self):
         self.logic.clearHighlight()
@@ -349,9 +353,13 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
             display.SetVisibility(not display.GetVisibility())
 
     def onToggleEdges(self):
+        """On the mesh and on the highlighted face together: they are one picture."""
         display = self.meshDisplayNode()
-        if display is not None:
-            display.SetEdgeVisibility(not display.GetEdgeVisibility())
+        if display is None:
+            return
+        visible = not display.GetEdgeVisibility()
+        display.SetEdgeVisibility(visible)
+        self.logic.setHighlightEdgeVisibility(visible)
 
     def onToggleFaceColors(self):
         display = self.meshDisplayNode()
@@ -383,35 +391,6 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         transparent = display.GetOpacity() <= TRANSPARENT_OPACITY
         display.SetOpacity(SOLID_OPACITY if transparent else TRANSPARENT_OPACITY)
 
-    # -- names from an earlier export --------------------------------------
-    def onLoadNames(self):
-        """Read names out of a face_table.csv, matched to this mesh's faces by id."""
-        start = self.ui.outputDirectoryPathLineEdit.currentPath or ""
-        path = qt.QFileDialog.getOpenFileName(
-            slicer.util.mainWindow(), _("Load face names"), start, _("Face table (*.csv)")
-        )
-        if not path:
-            return
-        try:
-            names = self.logic.readNames(path)
-        except (OSError, ValueError) as error:
-            self.setStatus(str(error), warning=True)
-            return
-        unknown = sorted(set(names) - {face.face_id for face in self._measured})
-        self._names.update(names)
-        self.populateTable()
-        self.saveToParameterNode()
-        message = _("Read {count} names from {name}.").format(
-            count=len(names), name=os.path.basename(path)
-        )
-        if unknown:
-            message += " " + _(
-                "Faces {faces} are named in it but not in this mesh, so those names are "
-                "carried but unused -- which is what a table written against a different "
-                "clip looks like."
-            ).format(faces=unknown)
-        self.setStatus(message, warning=bool(unknown))
-
     # -- export ------------------------------------------------------------
     def onExport(self):
         node = self.ui.inputMeshSelector.currentNode()
@@ -428,7 +407,7 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
             )
         self.setStatus(
             _("Wrote {directory}: {elements:,} {kind} elements over {nodes:,} nodes, "
-              "{faces} faces, and the names as face_table.csv.").format(
+              "{faces} faces.").format(
                 directory=directory,
                 elements=result.number_of_elements,
                 kind=result.element_type,
@@ -451,7 +430,6 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
             else _("Every face has to be named first: the names are the solver's boundary "
                    "condition names, so a face without one has nothing to bind to.")
         )
-        self.ui.loadNamesButton.enabled = bool(self._measured)
 
     def setStatus(self, text, warning=False):
         self.ui.statusLabel.text = text
@@ -505,7 +483,10 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
     @staticmethod
     def writeNamesParameter(names):
         """The names as one string, for a parameter node to carry into a saved scene."""
-        return json.dumps({str(face_id): name for face_id, name in sorted(names.items())})
+        return json.dumps(
+            {str(face_id): name for face_id, name in sorted(names.items())},
+            separators=(",", ":"),
+        )
 
     @staticmethod
     def readNamesParameter(text):
@@ -525,61 +506,21 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
                 continue
         return names
 
-    @staticmethod
-    def readNames(path):
-        """`{face id: name}` out of a face table, whether or not every row is filled in."""
-        with open(path, newline="") as handle:
-            reader = csv.DictReader(handle)
-            if not reader.fieldnames or "FaceID" not in reader.fieldnames:
-                raise ValueError(
-                    _("{path} has no FaceID column, so it is not a face table.").format(path=path)
-                )
-            names = {}
-            for row in reader:
-                rawId = (row.get("FaceID") or "").strip()
-                if rawId:
-                    names[int(rawId)] = (row.get("Name") or "").strip()
-        return names
-
-    @staticmethod
-    def writeNames(path, measured, names):
-        """Write the table the command line tools read, measurements included."""
-        columns = ("FaceID", "ClipVesselName", "Name", "Cells", "Area", "Diameter",
-                   "X", "Y", "Z", "Flatness")
-        with open(path, "w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=columns)
-            writer.writeheader()
-            for face in measured:
-                writer.writerow({
-                    "FaceID": face.face_id,
-                    "ClipVesselName": "",
-                    "Name": names.get(face.face_id, ""),
-                    "Cells": face.cell_count,
-                    "Area": f"{face.area:.4f}",
-                    "Diameter": f"{face.effective_diameter:.3f}",
-                    "X": f"{face.centroid[0]:.2f}",
-                    "Y": f"{face.centroid[1]:.2f}",
-                    "Z": f"{face.centroid[2]:.2f}",
-                    "Flatness": f"{face.flatness:.4f}",
-                })
-
     def export(self, mesh, measured, names, directory, faceIdArrayNames):
         """Write the mesh-complete folder, through the package's own checks.
 
-        The names go in with it as `face_table.csv`. They are the one part of the folder
-        that was a decision rather than a calculation, so a folder without them cannot be
-        rebuilt after a remesh without doing the naming again -- and the command line
-        tools read that file, so a case exported here can be packaged by a script.
+        The names are not written beside it. They are saved with the scene, which is
+        where anything needing them reads them from -- including the workflow scripts that
+        package cases from a terminal. A copy in the folder would be a second answer to
+        the same question, and the one that goes stale is the one on disk.
         """
         table = face_table.FaceTable([
             face_table.Face(face.face_id, names[face.face_id]) for face in measured
         ])
         arrayName = self.faceIdArrayName(mesh, faceIdArrayNames)
-        result = mesh_complete.write_mesh_complete(
+        return mesh_complete.write_mesh_complete(
             mesh, table, directory, face_id_array_name=arrayName
         )
-        self.writeNames(os.path.join(directory, "face_table.csv"), measured, names)
-        return result
 
     @staticmethod
     def faceIdArrayName(mesh, faceIdArrayNames):
@@ -614,8 +555,14 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
         display.SetScalarVisibility(True)
 
     # -- the highlight -----------------------------------------------------
-    def highlight(self, mesh, faceId, faceIdArrayNames):
-        """Put one face of the mesh in a node of its own, so it can be seen."""
+    def highlight(self, mesh, faceId, faceIdArrayNames, showEdges=False):
+        """Put one face of the mesh in a node of its own, so it can be seen.
+
+        The node is not saved with the scene and is hidden from the editors, so it stays
+        out of the subject hierarchy and out of every node selector: it is a way of
+        looking at the mesh, not a thing the case has. Hidden before it is added, because
+        the subject hierarchy takes its item from a node as it arrives.
+        """
         arrayName = self.faceIdArrayName(mesh, faceIdArrayNames)
         if arrayName is None:
             return None
@@ -624,24 +571,42 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
         selected = np.flatnonzero(ids == faceId)
         face = cells.as_polydata(cells.extract(surface, selected))
 
-        node = slicer.mrmlScene.GetFirstNodeByName(HIGHLIGHT_NODE_NAME)
+        node = self.highlightNode()
         if node is None:
-            node = slicer.mrmlScene.AddNewNodeByClass(
-                "vtkMRMLModelNode", HIGHLIGHT_NODE_NAME
-            )
-            node.CreateDefaultDisplayNodes()
+            node = slicer.mrmlScene.CreateNodeByClass("vtkMRMLModelNode")
+            node.SetName(HIGHLIGHT_NODE_NAME)
             node.SetSaveWithScene(False)
+            node.SetHideFromEditors(True)
+            node = slicer.mrmlScene.AddNode(node)
+            node.CreateDefaultDisplayNodes()
             display = node.GetDisplayNode()
+            display.SetSaveWithScene(False)
+            display.SetHideFromEditors(True)
             display.SetColor(1.0, 0.35, 0.0)
-            display.SetEdgeVisibility(True)
             display.SetLineWidth(2)
         node.SetAndObserveMesh(face)
+        node.GetDisplayNode().SetEdgeVisibility(showEdges)
         node.GetDisplayNode().SetVisibility(True)
         return node
 
     @staticmethod
-    def clearHighlight():
-        node = slicer.mrmlScene.GetFirstNodeByName(HIGHLIGHT_NODE_NAME)
+    def highlightNode():
+        """The highlight's node, which being hidden is not found by name lookups."""
+        for index in range(slicer.mrmlScene.GetNumberOfNodesByClass("vtkMRMLModelNode")):
+            node = slicer.mrmlScene.GetNthNodeByClass(index, "vtkMRMLModelNode")
+            if node.GetName() == HIGHLIGHT_NODE_NAME:
+                return node
+        return None
+
+    @classmethod
+    def setHighlightEdgeVisibility(cls, visible):
+        node = cls.highlightNode()
+        if node is not None and node.GetDisplayNode() is not None:
+            node.GetDisplayNode().SetEdgeVisibility(visible)
+
+    @classmethod
+    def clearHighlight(cls):
+        node = cls.highlightNode()
         if node is not None:
             slicer.mrmlScene.RemoveNode(node)
 
@@ -680,17 +645,23 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         self.assertEqual(len(result.face_surfaces), 3)
         self.assertTrue(os.path.isfile(os.path.join(directory, mesh_complete.VOLUME_MESH_NAME)))
 
-        # The names go out with the folder, and come back for the next mesh.
-        table = os.path.join(directory, "face_table.csv")
-        self.assertTrue(os.path.isfile(table))
-        self.assertEqual(logic.readNames(table), names)
+        # The names are the scene's, not the folder's.
+        self.assertFalse(os.path.isfile(os.path.join(directory, "face_table.csv")))
 
         node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", "mesh")
         node.SetAndObserveMesh(mesh)
-        highlighted = logic.highlight(mesh, wall.face_id, "CellEntityIds")
+        highlighted = logic.highlight(mesh, wall.face_id, "CellEntityIds", showEdges=True)
         self.assertEqual(highlighted.GetMesh().GetNumberOfCells(), wall.cell_count)
+        self.assertTrue(highlighted.GetDisplayNode().GetEdgeVisibility())
+        self.assertTrue(highlighted.GetHideFromEditors())
+        self.assertFalse(highlighted.GetSaveWithScene())
+
+        # The edges toggle reaches it.
+        logic.setHighlightEdgeVisibility(False)
+        self.assertFalse(highlighted.GetDisplayNode().GetEdgeVisibility())
+
         logic.clearHighlight()
-        self.assertIsNone(slicer.mrmlScene.GetFirstNodeByName(HIGHLIGHT_NODE_NAME))
+        self.assertIsNone(logic.highlightNode())
 
         # The three display toggles, each reading the state it is turning around.
         node.CreateDefaultDisplayNodes()

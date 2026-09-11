@@ -84,8 +84,8 @@ def cube_face_table():
 
     return FaceTable(
         [
-            Face(WALL_ID, "wall", "Wall"),
-            Face(INLET_ID, "cap_inlet", "Inlet"),
-            Face(OUTLET_ID, "cap_outlet", "Outlet 1"),
+            Face(WALL_ID, "wall"),
+            Face(INLET_ID, "cap_inlet"),
+            Face(OUTLET_ID, "cap_outlet"),
         ]
     )
