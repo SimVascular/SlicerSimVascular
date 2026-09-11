@@ -39,6 +39,7 @@ import os
 import numpy as np
 import qt
 import slicer
+import vtk
 from vtk.util.numpy_support import vtk_to_numpy
 from slicer.i18n import tr as _
 from slicer.i18n import translate
@@ -89,7 +90,6 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         self._measured = []
         self._names = {}
         self._updating = False
-        self._meshWasVisible = None
 
     def setup(self):
         ScriptedLoadableModuleWidget.setup(self)
@@ -107,14 +107,31 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         table.horizontalHeader().setSectionResizeMode(qt.QHeaderView.ResizeToContents)
         table.horizontalHeader().setSectionResizeMode(NAME_COLUMN, qt.QHeaderView.Stretch)
 
+        # The three buttons beside the selector, none of them checkable: a mark would be
+        # saying what the display node holds, and nothing tells this when that changes
+        # elsewhere, so it would sooner or later contradict the scene. Each reads the state
+        # at the moment it is pressed and turns it around.
+        rowHeight = self.ui.inputMeshSelector.sizeHint.height()
+        buttons = (
+            (self.ui.meshVisibilityButton, ":/Icons/Medium/SlicerVisibleInvisible.png",
+             self.onToggleVisibility),
+            (self.ui.meshColorsButton, self.resourcePath("Icons/ToggleFaceColors.svg"),
+             self.onToggleFaceColors),
+            (self.ui.meshTransparencyButton, self.resourcePath("Icons/ToggleTransparency.svg"),
+             self.onToggleTransparency),
+        )
+        for button, icon, handler in buttons:
+            button.setIcon(qt.QIcon(icon))
+            button.setAutoRaise(True)
+            button.setFixedHeight(rowHeight)
+            button.setIconSize(qt.QSize(rowHeight - 8, rowHeight - 8))
+            button.connect("clicked()", handler)
+
         self.ui.inputMeshSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.onMeshChanged)
         self.ui.faceIdArrayLineEdit.connect("editingFinished()", self.onMeshChanged)
         self.ui.facesTable.connect("itemSelectionChanged()", self.onSelectionChanged)
         self.ui.facesTable.connect("cellChanged(int,int)", self.onNameEdited)
-        self.ui.highlightCheckBox.connect("toggled(bool)", self.onSelectionChanged)
-        self.ui.hideMeshCheckBox.connect("toggled(bool)", self.onSelectionChanged)
-        self.ui.loadTableButton.connect("clicked(bool)", self.onLoadTable)
-        self.ui.saveTableButton.connect("clicked(bool)", self.onSaveTable)
+        self.ui.loadNamesButton.connect("clicked(bool)", self.onLoadNames)
         self.ui.exportButton.connect("clicked(bool)", self.onExport)
 
         self.updateButtons()
@@ -211,38 +228,63 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         return self._measured[row] if 0 <= row < len(self._measured) else None
 
     def onSelectionChanged(self, *_args):
+        """Show whichever face is selected. Always: a row on its own says very little."""
         face = self.selectedFace()
-        if face is None or not self.ui.highlightCheckBox.checked:
+        node = self.ui.inputMeshSelector.currentNode()
+        if face is None or node is None or node.GetMesh() is None:
             self.clearHighlight()
             return
-        node = self.ui.inputMeshSelector.currentNode()
-        if node is None or node.GetMesh() is None:
-            return
-        self.logic.highlight(
-            node.GetMesh(), face.face_id, self.ui.faceIdArrayLineEdit.text
-        )
-        self.setMeshVisible(not self.ui.hideMeshCheckBox.checked)
+        self.logic.highlight(node.GetMesh(), face.face_id, self.ui.faceIdArrayLineEdit.text)
 
     def clearHighlight(self):
         self.logic.clearHighlight()
-        self.setMeshVisible(True)
 
-    def setMeshVisible(self, visible):
+    # -- looking at the mesh -----------------------------------------------
+    def meshDisplayNode(self):
         node = self.ui.inputMeshSelector.currentNode()
-        display = node.GetDisplayNode() if node else None
+        if node is None:
+            return None
+        if node.GetDisplayNode() is None:
+            node.CreateDefaultDisplayNodes()
+        return node.GetDisplayNode()
+
+    def onToggleVisibility(self):
+        display = self.meshDisplayNode()
+        if display is not None:
+            display.SetVisibility(not display.GetVisibility())
+
+    def onToggleFaceColors(self):
+        display = self.meshDisplayNode()
+        node = self.ui.inputMeshSelector.currentNode()
+        if display is None or node is None or node.GetMesh() is None:
+            return
+        if display.GetScalarVisibility():
+            display.SetScalarVisibility(False)
+            return
+        arrayName = self.logic.faceIdArrayName(
+            node.GetMesh(), self.ui.faceIdArrayLineEdit.text
+        )
+        if arrayName is None:
+            self.setStatus(
+                _("Nothing to colour by: this mesh carries no face ids."), warning=True
+            )
+            return
+        self.logic.colourByFaceIds(display, arrayName)
+
+    def onToggleTransparency(self):
+        display = self.meshDisplayNode()
         if display is None:
             return
-        if self._meshWasVisible is None:
-            self._meshWasVisible = display.GetVisibility()
-        display.SetVisibility(self._meshWasVisible if visible else False)
-        if visible:
-            self._meshWasVisible = None
+        display.SetOpacity(1.0 if display.GetOpacity() < 1.0 else 0.5)
 
-    # -- the face table file -----------------------------------------------
-    def onLoadTable(self):
-        path = self.ui.faceTablePathLineEdit.currentPath
+    # -- names from an earlier export --------------------------------------
+    def onLoadNames(self):
+        """Read names out of a face_table.csv, matched to this mesh's faces by id."""
+        start = self.ui.outputDirectoryPathLineEdit.currentPath or ""
+        path = qt.QFileDialog.getOpenFileName(
+            slicer.util.mainWindow(), _("Load face names"), start, _("Face table (*.csv)")
+        )
         if not path:
-            self.setStatus(_("Give the path of a face table to read."), warning=True)
             return
         try:
             names = self.logic.readNames(path)
@@ -263,18 +305,6 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
             ).format(faces=unknown)
         self.setStatus(message, warning=bool(unknown))
 
-    def onSaveTable(self):
-        path = self.ui.faceTablePathLineEdit.currentPath
-        if not path:
-            self.setStatus(_("Give the path to write the face table to."), warning=True)
-            return
-        try:
-            self.logic.writeNames(path, self._measured, self._names)
-        except (OSError, ValueError) as error:
-            self.setStatus(str(error), warning=True)
-            return
-        self.setStatus(_("Wrote {path}.").format(path=path))
-
     # -- export ------------------------------------------------------------
     def onExport(self):
         node = self.ui.inputMeshSelector.currentNode()
@@ -291,7 +321,7 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
             )
         self.setStatus(
             _("Wrote {directory}: {elements:,} {kind} elements over {nodes:,} nodes, "
-              "{faces} faces.").format(
+              "{faces} faces, and the names as face_table.csv.").format(
                 directory=directory,
                 elements=result.number_of_elements,
                 kind=result.element_type,
@@ -314,7 +344,7 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
             else _("Every face has to be named first: the names are the solver's boundary "
                    "condition names, so a face without one has nothing to bind to.")
         )
-        self.ui.saveTableButton.enabled = bool(self._measured)
+        self.ui.loadNamesButton.enabled = bool(self._measured)
 
     def setStatus(self, text, warning=False):
         self.ui.statusLabel.text = text
@@ -404,26 +434,52 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
                 })
 
     def export(self, mesh, measured, names, directory, faceIdArrayNames):
-        """Write the mesh-complete folder, through the package's own checks."""
+        """Write the mesh-complete folder, through the package's own checks.
+
+        The names go in with it as `face_table.csv`. They are the one part of the folder
+        that was a decision rather than a calculation, so a folder without them cannot be
+        rebuilt after a remesh without doing the naming again -- and the command line
+        tools read that file, so a case exported here can be packaged by a script.
+        """
         table = face_table.FaceTable([
             face_table.Face(face.face_id, names[face.face_id]) for face in measured
         ])
-        arrayName = self._faceIdArrayName(mesh, faceIdArrayNames)
-        return mesh_complete.write_mesh_complete(
+        arrayName = self.faceIdArrayName(mesh, faceIdArrayNames)
+        result = mesh_complete.write_mesh_complete(
             mesh, table, directory, face_id_array_name=arrayName
         )
+        self.writeNames(os.path.join(directory, "face_table.csv"), measured, names)
+        return result
 
     @staticmethod
-    def _faceIdArrayName(mesh, faceIdArrayNames):
+    def faceIdArrayName(mesh, faceIdArrayNames):
+        """The first of the offered names the mesh carries, or None."""
         for candidate in (name.strip() for name in (faceIdArrayNames or "").split(",")):
             if candidate and mesh.GetCellData().GetArray(candidate) is not None:
                 return candidate
         return None
 
+    @staticmethod
+    def colourByFaceIds(display, arrayName):
+        """Colour a model by its face ids, each face its own flat colour.
+
+        The ids are labels rather than a measurement, so the colour table has to be one
+        whose neighbouring entries differ -- a continuous one would give twenty pulmonary
+        branches twenty shades of the same colour.
+        """
+        display.SetActiveScalarName(arrayName)
+        display.SetActiveAttributeLocation(vtk.vtkAssignAttribute.CELL_DATA)
+        for colourNodeId in ("vtkMRMLColorTableNodeRandom", "vtkMRMLColorTableNodeLabels"):
+            if slicer.mrmlScene.GetNodeByID(colourNodeId) is not None:
+                display.SetAndObserveColorNodeID(colourNodeId)
+                break
+        display.SetScalarRangeFlag(display.UseDataScalarRange)
+        display.SetScalarVisibility(True)
+
     # -- the highlight -----------------------------------------------------
     def highlight(self, mesh, faceId, faceIdArrayNames):
         """Put one face of the mesh in a node of its own, so it can be seen."""
-        arrayName = self._faceIdArrayName(mesh, faceIdArrayNames)
+        arrayName = self.faceIdArrayName(mesh, faceIdArrayNames)
         if arrayName is None:
             return None
         surface = faces.boundary_of(mesh)
@@ -485,8 +541,9 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         self.assertEqual(len(result.face_surfaces), 3)
         self.assertTrue(os.path.isfile(os.path.join(directory, mesh_complete.VOLUME_MESH_NAME)))
 
+        # The names go out with the folder, and come back for the next mesh.
         table = os.path.join(directory, "face_table.csv")
-        logic.writeNames(table, measured, names)
+        self.assertTrue(os.path.isfile(table))
         self.assertEqual(logic.readNames(table), names)
 
         node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", "mesh")
@@ -496,4 +553,14 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         logic.clearHighlight()
         self.assertIsNone(slicer.mrmlScene.GetFirstNodeByName(HIGHLIGHT_NODE_NAME))
 
-        self.delayDisplay("Measured, named, exported and highlighted")
+        # The three display toggles, each reading the state it is turning around.
+        node.CreateDefaultDisplayNodes()
+        display = node.GetDisplayNode()
+        self.assertEqual(logic.faceIdArrayName(mesh, "CellEntityIds, ModelFaceID"), "CellEntityIds")
+        logic.colourByFaceIds(display, "CellEntityIds")
+        self.assertTrue(display.GetScalarVisibility())
+        self.assertEqual(display.GetActiveScalarName(), "CellEntityIds")
+        display.SetOpacity(0.5)
+        self.assertAlmostEqual(display.GetOpacity(), 0.5)
+
+        self.delayDisplay("Measured, named, exported, highlighted and coloured")

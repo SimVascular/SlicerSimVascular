@@ -16,6 +16,7 @@ mesh/
   mesh-complete.exterior.vtp    every boundary cell, with ModelFaceID
   walls_combined.vtp            the wall faces merged, for the no-slip condition
   mesh-surfaces/cap_RSVC.vtp    one file per named face
+  face_table.csv                the names, to load again after a remesh
 ```
 
 `GlobalNodeID` is how a boundary condition is bound to the volume: each face file carries,
@@ -26,7 +27,13 @@ translation is a step of its own.
 
 ## The panel
 
-**Mesh** — the volume mesh node, and which cell array its face ids are in. *Face ids
+**Mesh** — the volume mesh node, and which cell array its face ids are in. Three buttons
+beside the selector, for seeing a cap that sits inside the anatomy: **show or hide** the
+mesh, **colour it by its face ids** so every face can be told from its neighbours at once,
+and make it **half transparent**. None of them is checkable — a mark would be saying what
+the display node holds, and nothing tells the panel when that changes elsewhere, so it
+would sooner or later contradict the scene. Each reads the state at the moment it is
+pressed and turns it around. *Face ids
 array* takes several names and uses the first the mesh carries: `CellEntityIds` is VMTK's
 and `ModelFaceID` is SimVascular's. A mesh whose ids went somewhere else needs that name
 here — CFD Mesh Generator writes them under whichever name its own field lists first that
@@ -34,17 +41,20 @@ the *input surface* already carried, which for a surface out of Clip Vessel can 
 `MaterialIds`.
 
 **Faces** — a row per face, with its cell count, area, the diameter of the circle of the
-same area, and its flatness. Selecting a row shows that face on its own in the 3D view,
-and *Hide the mesh* takes the rest of the anatomy away, which is the only way to see a cap
-that sits inside it. The `Name` column is the one to fill in.
+same area, and its flatness. Selecting a row shows that face on its own in the 3D view.
+The `Name` column is the one to fill in.
 
-**Face table file** — the same `face_table.csv` the command line tools read and write, so
-a case named here can be packaged by a script and one named by a script can be checked
-here. Loading a table keeps its names and remeasures the faces against the mesh now
-selected, which is what makes a remesh cheap: the naming survives it.
+**Load names…** reads a `face_table.csv` an earlier export wrote: the names are matched to
+faces by id and the faces are remeasured against the mesh now selected. That is what makes
+a remesh cheap — it does not cost the naming, which on twenty-odd caps is the expensive
+part.
 
-**Export** — writes the folder. The button stays disabled until every face has a name,
-because a face without one has no boundary condition to bind to.
+**Export** — writes the folder, `face_table.csv` included. The names are the one part of
+that folder that was a decision rather than a calculation, so they go in it: a folder
+without them cannot be rebuilt after a remesh without doing the naming again, and the
+command line tools read that same file, so a case exported here can be packaged by a
+script. The button stays disabled until every face has a name, because a face without one
+has no boundary condition to bind to.
 
 ## Naming the faces
 

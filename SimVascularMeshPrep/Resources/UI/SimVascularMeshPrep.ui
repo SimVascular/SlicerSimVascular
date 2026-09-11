@@ -25,6 +25,8 @@
        </widget>
       </item>
       <item row="0" column="1">
+       <layout class="QHBoxLayout" name="inputMeshHorizontalLayout">
+        <item>
        <widget class="qMRMLNodeComboBox" name="inputMeshSelector">
         <property name="toolTip">
          <string>The volume mesh to prepare, carrying a face id per cell - typically what CFD Mesh Generator handed back. Its boundary cells are the faces a solver binds its boundary conditions to.</string>
@@ -44,6 +46,56 @@
          <bool>false</bool>
         </property>
        </widget>
+        </item>
+        <item>
+         <widget class="QToolButton" name="meshColorsButton">
+          <property name="toolTip">
+           <string>Colour the mesh by its face ids, so that every face can be told from its neighbours at once. Pressing again turns it off.</string>
+          </property>
+          <property name="text">
+           <string/>
+          </property>
+          <property name="toolButtonStyle">
+           <enum>Qt::ToolButtonIconOnly</enum>
+          </property>
+          <property name="autoRaise">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QToolButton" name="meshTransparencyButton">
+          <property name="toolTip">
+           <string>Make the mesh half transparent, which is how a cap inside the anatomy is seen without hiding what surrounds it. Pressing again turns it back.</string>
+          </property>
+          <property name="text">
+           <string/>
+          </property>
+          <property name="toolButtonStyle">
+           <enum>Qt::ToolButtonIconOnly</enum>
+          </property>
+          <property name="autoRaise">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QToolButton" name="meshVisibilityButton">
+          <property name="toolTip">
+           <string>Show or hide the mesh. Hiding it is the other way to see a cap that sits inside the anatomy.</string>
+          </property>
+          <property name="text">
+           <string/>
+          </property>
+          <property name="toolButtonStyle">
+           <enum>Qt::ToolButtonIconOnly</enum>
+          </property>
+          <property name="autoRaise">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+       </layout>
       </item>
       <item row="1" column="0">
        <widget class="QLabel" name="faceIdArrayLabel">
@@ -84,7 +136,7 @@
       <item>
        <widget class="QTableWidget" name="facesTable">
         <property name="toolTip">
-         <string>One row per face of the mesh. Area and diameter tell one small branch from another; flatness is the largest distance of any point from the face's own best-fit plane, so a cap cut normal to the vessel reads 0 and one that does not was not cut cleanly.</string>
+         <string>One row per face of the mesh. Selecting a row shows that face on its own in the 3D view; use the buttons beside the mesh above to see past the anatomy around it. Area and diameter tell one small branch from another; flatness is the largest distance of any point from the face's own best-fit plane, so a cap cut normal to the vessel reads 0 and one that does not was not cut cleanly.</string>
         </property>
         <property name="minimumSize">
          <size>
@@ -106,77 +158,25 @@
       <item>
        <layout class="QHBoxLayout" name="highlightHorizontalLayout">
         <item>
-         <widget class="QCheckBox" name="highlightCheckBox">
+         <spacer name="highlightSpacer">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QPushButton" name="loadNamesButton">
           <property name="toolTip">
-           <string>Show the selected face on its own in the 3D view, so that a row can be matched to a vessel by looking at it.</string>
+           <string>Read names from a face_table.csv an earlier export wrote. The names are matched to faces by id and the faces are remeasured against the mesh now selected, which is what makes a remesh cheap: it does not cost the naming.</string>
           </property>
           <property name="text">
-           <string>Highlight the selected face</string>
-          </property>
-          <property name="checked">
-           <bool>true</bool>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QCheckBox" name="hideMeshCheckBox">
-          <property name="toolTip">
-           <string>Hide the mesh itself while a face is highlighted, which is the only way to see a cap that sits inside the anatomy.</string>
-          </property>
-          <property name="text">
-           <string>Hide the mesh</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="ctkCollapsibleButton" name="tableCollapsibleButton">
-     <property name="text">
-      <string>Face table file</string>
-     </property>
-     <layout class="QVBoxLayout" name="tableVerticalLayout">
-      <item>
-       <widget class="QLabel" name="tableHelpLabel">
-        <property name="text">
-         <string>The same face_table.csv the command line tools read, so a case named here can be packaged by a script and one named by a script can be checked here. Loading keeps the names and remeasures the faces, which is what makes a remesh cheap.</string>
-        </property>
-        <property name="wordWrap">
-         <bool>true</bool>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="ctkPathLineEdit" name="faceTablePathLineEdit">
-        <property name="toolTip">
-         <string>Path of the face table CSV to read names from or write them to.</string>
-        </property>
-        <property name="nameFilters">
-         <stringlist notr="true">
-          <string>Face table (*.csv)</string>
-         </stringlist>
-        </property>
-        <property name="filters">
-         <set>ctkPathLineEdit::Files|ctkPathLineEdit::Writable</set>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="tableButtonsHorizontalLayout">
-        <item>
-         <widget class="QPushButton" name="loadTableButton">
-          <property name="text">
-           <string>Load names</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QPushButton" name="saveTableButton">
-          <property name="text">
-           <string>Save names</string>
+           <string>Load names…</string>
           </property>
          </widget>
         </item>
@@ -194,7 +194,7 @@
       <item>
        <widget class="QLabel" name="exportHelpLabel">
         <property name="text">
-         <string>Writes mesh-complete.mesh.vtu, mesh-complete.exterior.vtp, walls_combined.vtp and one mesh-surfaces file per face into the folder below. Every path in solver.xml is resolved relative to the directory a job runs in, so this is normally the mesh folder of a case.</string>
+         <string>Writes mesh-complete.mesh.vtu, mesh-complete.exterior.vtp, walls_combined.vtp, one mesh-surfaces file per face, and the face_table.csv recording the names, into the folder below. Every path in solver.xml is resolved relative to the directory a job runs in, so this is normally the mesh folder of a case.</string>
         </property>
         <property name="wordWrap">
          <bool>true</bool>
