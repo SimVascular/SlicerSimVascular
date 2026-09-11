@@ -114,11 +114,23 @@ Two deliberate differences:
 ## Face ids array
 
 Which cell array the face ids are read from, by the same rule CFD Mesh Generator uses: the
-first of the names offered that the mesh carries. `CellEntityIds` is VMTK's name and
-`ModelFaceID` is SimVascular's. A mesh whose ids went somewhere else — CFD Mesh Generator
-writes them under whichever name its own field lists first that the *input surface* already
-carried, which for a surface out of Clip Vessel can be `MaterialIds` — needs that name
-given here.
+first of the names offered that the mesh carries. `CellEntityIds` is VMTK's name,
+`ModelFaceID` is SimVascular's, and `MaterialIds` is Slicer's own material array.
+
+That last one is in the default list, and last in it, because CFD Mesh Generator puts the
+ids there: its own field uses the first name the *input surface* already carried, and its
+widget prepends an integer cell array it finds on an input carrying neither of the others
+— which a surface out of Clip Vessel is. A mesh built on one arrives labelled by
+`MaterialIds` and is no less labelled for it, so there is nothing to set and nothing to
+redo upstream.
+
+Reading it cannot quietly mistake a real material array for face labels. A genuine one has
+nonzero values on the volume elements and a face id array does not, so the export refuses
+it and says so. Being last means a mesh carrying both is read by the name that means
+faces.
+
+Whichever array the input used, the exported files carry `ModelFaceID`, so the choice does
+not reach anything downstream.
 
 ## Outside Slicer
 

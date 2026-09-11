@@ -15,7 +15,19 @@ from vtk.util.numpy_support import vtk_to_numpy
 
 from svmeshcomplete import cells
 
-FACE_ID_ARRAY_NAMES = ("CellEntityIds", "ModelFaceID")
+# In priority order: the first of these the mesh carries is the one read.
+#
+# `CellEntityIds` is VMTK's name and `ModelFaceID` is SimVascular's. `MaterialIds` is
+# neither -- it is Slicer's own material array -- and it is here last because CFD Mesh
+# Generator puts it there: its Face ids array field uses the first name the *input surface*
+# already carried, and its widget prepends an integer cell array it finds on an input
+# carrying neither of the other two. A surface out of Clip Vessel carries MaterialIds, so
+# the ids of a mesh built on one land in it, and a mesh is no less labelled for that.
+#
+# Reading it cannot quietly mistake a real material array for face labels: a genuine one
+# has nonzero values on the volume elements, and `mesh_complete` refuses those, naming the
+# cause. It is last so that a mesh carrying both is read by the name that means faces.
+FACE_ID_ARRAY_NAMES = ("CellEntityIds", "ModelFaceID", "MaterialIds")
 
 
 class FaceGeometryError(ValueError):

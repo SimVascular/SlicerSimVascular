@@ -247,3 +247,42 @@ def test_walls_combined_is_written_even_when_the_wall_is_split(tmp_path):
     combined = io.read_dataset(result.walls_combined)
     pieces = sum(io.read_dataset(path).GetNumberOfCells() for path in result.wall_region_surfaces)
     assert combined.GetNumberOfCells() == pieces
+
+
+def test_ids_in_slicers_material_array_are_found(tmp_path):
+    """Where CFD Mesh Generator puts them when the input surface carried neither
+    CellEntityIds nor ModelFaceID, which a Clip Vessel surface does not."""
+    mesh = synthetic_mesh.cube_mesh(face_id_array_name="MaterialIds")
+    raw = io.write_dataset(mesh, tmp_path / "volume_mesh.vtu")
+    result = mesh_complete.write_mesh_complete(
+        raw, synthetic_mesh.cube_face_table(), tmp_path / "mesh"
+    )
+    assert len(result.face_surfaces) == 3
+
+
+def test_the_name_that_means_faces_wins_over_the_material_array(tmp_path):
+    from vtk.util.numpy_support import numpy_to_vtk
+
+    mesh = synthetic_mesh.cube_mesh()
+    materials = numpy_to_vtk(np.full(mesh.GetNumberOfCells(), 7, dtype=np.int32), deep=True)
+    materials.SetName("MaterialIds")
+    mesh.GetCellData().AddArray(materials)
+    raw = io.write_dataset(mesh, tmp_path / "volume_mesh.vtu")
+    assert mesh_complete.find_face_id_array(io.read_dataset(raw)) == "CellEntityIds"
+
+
+def test_a_real_material_array_is_refused_rather_than_read_as_faces(tmp_path):
+    """The safety net that makes reading MaterialIds at all acceptable: a genuine one
+    labels the volume elements, and a face id array does not."""
+    from vtk.util.numpy_support import numpy_to_vtk
+
+    mesh = synthetic_mesh.cube_mesh()
+    mesh.GetCellData().RemoveArray("CellEntityIds")
+    materials = numpy_to_vtk(np.full(mesh.GetNumberOfCells(), 7, dtype=np.int32), deep=True)
+    materials.SetName("MaterialIds")
+    mesh.GetCellData().AddArray(materials)
+    raw = io.write_dataset(mesh, tmp_path / "volume_mesh.vtu")
+    with pytest.raises(mesh_complete.MeshCompleteError, match="not the one holding them"):
+        mesh_complete.write_mesh_complete(
+            raw, synthetic_mesh.cube_face_table(), tmp_path / "mesh"
+        )

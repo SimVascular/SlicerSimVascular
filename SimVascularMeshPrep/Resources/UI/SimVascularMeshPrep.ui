@@ -55,10 +55,10 @@
       <item row="1" column="1">
        <widget class="QLineEdit" name="faceIdArrayLineEdit">
         <property name="toolTip">
-         <string>Names of the cell array holding the face ids, separated by commas; the first one the mesh carries is used. "CellEntityIds" is VMTK's name and "ModelFaceID" is the one SimVascular reads a model's faces by. A mesh whose ids went elsewhere needs that name here - CFD Mesh Generator writes them under whichever name its own field lists first that the input surface already carried, which for a surface out of Clip Vessel can be "MaterialIds".</string>
+         <string>Names of the cell array holding the face ids, separated by commas; the first one the mesh carries is used. "CellEntityIds" is VMTK's name and "ModelFaceID" is the one SimVascular reads a model's faces by. "MaterialIds" is Slicer's own material array and is listed last because CFD Mesh Generator puts the ids there when its input carried neither of the others, which a surface out of Clip Vessel does not. A mesh whose ids went somewhere else again needs that name adding here.</string>
         </property>
         <property name="text">
-         <string>CellEntityIds, ModelFaceID</string>
+         <string>CellEntityIds, ModelFaceID, MaterialIds</string>
         </property>
        </widget>
       </item>
