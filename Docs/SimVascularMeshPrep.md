@@ -29,8 +29,9 @@ translation is a step of its own.
 
 **Mesh** — the volume mesh node, and which cell array its face ids are in. Three buttons
 beside the selector, for seeing a cap that sits inside the anatomy: **show or hide** the
-mesh, **colour it by its face ids** so every face can be told from its neighbours at once,
-and make it **half transparent**. None of them is checkable — a mark would be saying what
+mesh, **colour it by its face ids** so every face can be told from its neighbours at once
+(turning that off leaves it a neutral grey rather than whatever colour the node was
+created with), and make it **half transparent**. None of them is checkable — a mark would be saying what
 the display node holds, and nothing tells the panel when that changes elsewhere, so it
 would sooner or later contradict the scene. Each reads the state at the moment it is
 pressed and turns it around. *Face ids

@@ -60,6 +60,11 @@ NAME_COLUMN = COLUMNS.index("Name")
 # The highlight's own node, kept out of the way of anything the operator has.
 HIGHLIGHT_NODE_NAME = "Mesh Prep face highlight"
 
+# What the mesh is left as when face colouring is turned off. The same neutral grey Clip
+# Vessel gives its output, rather than whatever colour the node happened to be created
+# with, which for a mesher's output is arbitrary.
+SOLID_COLOR = (0.75, 0.75, 0.75)
+
 
 class SimVascularMeshPrep(ScriptedLoadableModule):
     def __init__(self, parent):
@@ -259,7 +264,7 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         if display is None or node is None or node.GetMesh() is None:
             return
         if display.GetScalarVisibility():
-            display.SetScalarVisibility(False)
+            self.logic.showSolidColor(display)
             return
         arrayName = self.logic.faceIdArrayName(
             node.GetMesh(), self.ui.faceIdArrayLineEdit.text
@@ -460,6 +465,12 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
         return None
 
     @staticmethod
+    def showSolidColor(display):
+        """Turn face colouring off, leaving the mesh a neutral grey."""
+        display.SetScalarVisibility(False)
+        display.SetColor(*SOLID_COLOR)
+
+    @staticmethod
     def colourByFaceIds(display, arrayName):
         """Colour a model by its face ids, each face its own flat colour.
 
@@ -560,6 +571,9 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         logic.colourByFaceIds(display, "CellEntityIds")
         self.assertTrue(display.GetScalarVisibility())
         self.assertEqual(display.GetActiveScalarName(), "CellEntityIds")
+        logic.showSolidColor(display)
+        self.assertFalse(display.GetScalarVisibility())
+        self.assertEqual(tuple(round(c, 2) for c in display.GetColor()), SOLID_COLOR)
         display.SetOpacity(0.5)
         self.assertAlmostEqual(display.GetOpacity(), 0.5)
 
