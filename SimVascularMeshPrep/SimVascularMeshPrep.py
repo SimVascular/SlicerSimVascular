@@ -581,14 +581,24 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
             node.SetHideFromEditors(True)
             node = slicer.mrmlScene.AddNode(node)
             node.CreateDefaultDisplayNodes()
-            display = node.GetDisplayNode()
-            display.SetSaveWithScene(False)
-            display.SetHideFromEditors(True)
-            display.SetColor(*HIGHLIGHT_COLOR)
-            display.SetLineWidth(2)
+            node.GetDisplayNode().SetSaveWithScene(False)
+            node.GetDisplayNode().SetHideFromEditors(True)
         node.SetAndObserveMesh(face)
-        node.GetDisplayNode().SetEdgeVisibility(showEdges)
-        node.GetDisplayNode().SetVisibility(True)
+
+        # Set every time rather than only on the node's first use, so that a highlight left
+        # over from an earlier run of the module cannot keep an earlier appearance.
+        display = node.GetDisplayNode()
+        display.SetColor(*HIGHLIGHT_COLOR)
+        display.SetLineWidth(2)
+        # One colour whichever way a cell faces. Slicer shifts a backface's hue so that
+        # inside can be told from outside -- by (-0.05, -0.1, 0), which turns this yellow
+        # into RGB (1, 0.73, 0.1), an orange. On a cap that is the strips the boundary
+        # layer sweeps out at the vessel end, wound the other way from the cap's own
+        # triangles, and a highlight saying "this is the face" has nothing to say about
+        # which way round its cells are.
+        display.SetBackfaceColorHSVOffset(0.0, 0.0, 0.0)
+        display.SetEdgeVisibility(showEdges)
+        display.SetVisibility(True)
         return node
 
     @staticmethod
@@ -658,6 +668,11 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         self.assertEqual(
             tuple(round(c, 2) for c in highlighted.GetDisplayNode().GetColor()),
             HIGHLIGHT_COLOR,
+        )
+        # A backface has to be the same colour: Slicer shifts its hue by default, which
+        # turns this yellow orange on the strips a boundary layer leaves at a vessel end.
+        self.assertEqual(
+            tuple(highlighted.GetDisplayNode().GetBackfaceColorHSVOffset()), (0.0, 0.0, 0.0)
         )
         self.assertTrue(highlighted.GetHideFromEditors())
         self.assertFalse(highlighted.GetSaveWithScene())
