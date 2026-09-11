@@ -1,11 +1,11 @@
 #-----------------------------------------------------------------------------
-set(MODULE_NAME MeshCompleteExport)
+set(MODULE_NAME SimVascularMeshPrep)
 
 #-----------------------------------------------------------------------------
 # `svmeshcomplete` does the work; this module is an MRML adapter over it. Listing the
 # package's files here installs them beside the module, which is already on Slicer's Python
 # path -- so neither a binary install nor a development checkout on Additional Module Paths
-# needs pip. `MeshCompleteExport/pyproject.toml` covers the other direction: importing it
+# needs pip. `SimVascularMeshPrep/pyproject.toml` covers the other direction: importing it
 # outside Slicer.
 set(MODULE_PYTHON_SCRIPTS
   ${MODULE_NAME}.py

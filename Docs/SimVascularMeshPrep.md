@@ -24,6 +24,28 @@ per point, the id of the volume node it is, and the solver looks each one up.
 boundary term is integrated against. No mesher writes any of this, which is why the
 translation is a step of its own.
 
+## The panel
+
+**Mesh** — the volume mesh node, and which cell array its face ids are in. *Face ids
+array* takes several names and uses the first the mesh carries: `CellEntityIds` is VMTK's
+and `ModelFaceID` is SimVascular's. A mesh whose ids went somewhere else needs that name
+here — CFD Mesh Generator writes them under whichever name its own field lists first that
+the *input surface* already carried, which for a surface out of Clip Vessel can be
+`MaterialIds`.
+
+**Faces** — a row per face, with its cell count, area, the diameter of the circle of the
+same area, and its flatness. Selecting a row shows that face on its own in the 3D view,
+and *Hide the mesh* takes the rest of the anatomy away, which is the only way to see a cap
+that sits inside it. The `Name` column is the one to fill in.
+
+**Face table file** — the same `face_table.csv` the command line tools read and write, so
+a case named here can be packaged by a script and one named by a script can be checked
+here. Loading a table keeps its names and remeasures the faces against the mesh now
+selected, which is what makes a remesh cheap: the naming survives it.
+
+**Export** — writes the folder. The button stays disabled until every face has a name,
+because a face without one has no boundary condition to bind to.
+
 ## Naming the faces
 
 A face id is a number; a boundary condition is per vessel. The panel lists every face of
@@ -41,10 +63,6 @@ or `wall_*` for vessel wall, which is what gets merged into `walls_combined.vtp`
 **Flatness is the check on a cap.** It is the largest distance of any point of the face
 from its own best-fit plane, so a cap cut normal to the vessel reads 0. One that does not
 was not cut cleanly, and the flow crossing it is not what its boundary condition says.
-
-The table is read from and written to a `face_table.csv` beside the mesh, so a case named
-here can be packaged from a script, and a case named in a script can be checked here.
-Re-reading a table after a remesh keeps the names and remeasures the faces.
 
 ## What it refuses
 

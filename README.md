@@ -8,6 +8,7 @@ This repository provides 3D Slicer modules for [SimVascular](https://github.com/
 
 - [Virtual Stent (SDFStent)](Docs/SDFStent.md): Expand vessel to simulate stent deployment using SDFStent algorithm (provided by svMorph Python package).
 - [Paint Model (PaintModel)](Docs/PaintModel.md): Interactively paint, group, and export face regions on surface models, with a face-grouping workflow inspired by Autodesk Meshmixer.
+- [SimVascular Mesh Prep (SimVascularMeshPrep)](Docs/SimVascularMeshPrep.md): Name the faces of a volume mesh and write the mesh-complete folder an svMultiPhysics case reads.
 
 ## How to cite?
 

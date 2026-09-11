@@ -1,0 +1,285 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SimVascularMeshPrep</class>
+ <widget class="qMRMLWidget" name="SimVascularMeshPrep">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>440</width>
+    <height>760</height>
+   </rect>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="ctkCollapsibleButton" name="inputCollapsibleButton">
+     <property name="text">
+      <string>Mesh</string>
+     </property>
+     <layout class="QFormLayout" name="inputFormLayout">
+      <item row="0" column="0">
+       <widget class="QLabel" name="inputMeshLabel">
+        <property name="text">
+         <string>Volume mesh:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="qMRMLNodeComboBox" name="inputMeshSelector">
+        <property name="toolTip">
+         <string>The volume mesh to prepare, carrying a face id per cell - typically what CFD Mesh Generator handed back. Its boundary cells are the faces a solver binds its boundary conditions to.</string>
+        </property>
+        <property name="nodeTypes">
+         <stringlist notr="true">
+          <string>vtkMRMLModelNode</string>
+         </stringlist>
+        </property>
+        <property name="noneEnabled">
+         <bool>true</bool>
+        </property>
+        <property name="addEnabled">
+         <bool>false</bool>
+        </property>
+        <property name="removeEnabled">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="faceIdArrayLabel">
+        <property name="text">
+         <string>Face ids array:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLineEdit" name="faceIdArrayLineEdit">
+        <property name="toolTip">
+         <string>Names of the cell array holding the face ids, separated by commas; the first one the mesh carries is used. "CellEntityIds" is VMTK's name and "ModelFaceID" is the one SimVascular reads a model's faces by. A mesh whose ids went elsewhere needs that name here - CFD Mesh Generator writes them under whichever name its own field lists first that the input surface already carried, which for a surface out of Clip Vessel can be "MaterialIds".</string>
+        </property>
+        <property name="text">
+         <string>CellEntityIds, ModelFaceID</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="facesCollapsibleButton">
+     <property name="text">
+      <string>Faces</string>
+     </property>
+     <layout class="QVBoxLayout" name="facesVerticalLayout">
+      <item>
+       <widget class="QLabel" name="facesHelpLabel">
+        <property name="text">
+         <string>Name every face. The names become the mesh-surfaces file names, and through them the Add_face and Add_BC names in solver.xml, so they are what results come back labelled with. Use cap_ for a face the flow crosses and wall or wall_ for vessel wall.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QTableWidget" name="facesTable">
+        <property name="toolTip">
+         <string>One row per face of the mesh. Area and diameter tell one small branch from another; flatness is the largest distance of any point from the face's own best-fit plane, so a cap cut normal to the vessel reads 0 and one that does not was not cut cleanly.</string>
+        </property>
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>260</height>
+         </size>
+        </property>
+        <property name="selectionBehavior">
+         <enum>QAbstractItemView::SelectRows</enum>
+        </property>
+        <property name="selectionMode">
+         <enum>QAbstractItemView::SingleSelection</enum>
+        </property>
+        <property name="alternatingRowColors">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="highlightHorizontalLayout">
+        <item>
+         <widget class="QCheckBox" name="highlightCheckBox">
+          <property name="toolTip">
+           <string>Show the selected face on its own in the 3D view, so that a row can be matched to a vessel by looking at it.</string>
+          </property>
+          <property name="text">
+           <string>Highlight the selected face</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QCheckBox" name="hideMeshCheckBox">
+          <property name="toolTip">
+           <string>Hide the mesh itself while a face is highlighted, which is the only way to see a cap that sits inside the anatomy.</string>
+          </property>
+          <property name="text">
+           <string>Hide the mesh</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="tableCollapsibleButton">
+     <property name="text">
+      <string>Face table file</string>
+     </property>
+     <layout class="QVBoxLayout" name="tableVerticalLayout">
+      <item>
+       <widget class="QLabel" name="tableHelpLabel">
+        <property name="text">
+         <string>The same face_table.csv the command line tools read, so a case named here can be packaged by a script and one named by a script can be checked here. Loading keeps the names and remeasures the faces, which is what makes a remesh cheap.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="ctkPathLineEdit" name="faceTablePathLineEdit">
+        <property name="toolTip">
+         <string>Path of the face table CSV to read names from or write them to.</string>
+        </property>
+        <property name="nameFilters">
+         <stringlist notr="true">
+          <string>Face table (*.csv)</string>
+         </stringlist>
+        </property>
+        <property name="filters">
+         <set>ctkPathLineEdit::Files|ctkPathLineEdit::Writable</set>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="tableButtonsHorizontalLayout">
+        <item>
+         <widget class="QPushButton" name="loadTableButton">
+          <property name="text">
+           <string>Load names</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="saveTableButton">
+          <property name="text">
+           <string>Save names</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="exportCollapsibleButton">
+     <property name="text">
+      <string>Export</string>
+     </property>
+     <layout class="QVBoxLayout" name="exportVerticalLayout">
+      <item>
+       <widget class="QLabel" name="exportHelpLabel">
+        <property name="text">
+         <string>Writes mesh-complete.mesh.vtu, mesh-complete.exterior.vtp, walls_combined.vtp and one mesh-surfaces file per face into the folder below. Every path in solver.xml is resolved relative to the directory a job runs in, so this is normally the mesh folder of a case.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="ctkPathLineEdit" name="outputDirectoryPathLineEdit">
+        <property name="toolTip">
+         <string>Folder the mesh-complete files are written into, and created if it does not exist.</string>
+        </property>
+        <property name="filters">
+         <set>ctkPathLineEdit::Dirs|ctkPathLineEdit::Writable</set>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="exportButton">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="text">
+         <string>Export mesh-complete</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="statusLabel">
+     <property name="text">
+      <string/>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>ctkCollapsibleButton</class>
+   <extends>QWidget</extends>
+   <header>ctkCollapsibleButton.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>ctkPathLineEdit</class>
+   <extends>QWidget</extends>
+   <header>ctkPathLineEdit.h</header>
+  </customwidget>
+  <customwidget>
+   <class>qMRMLNodeComboBox</class>
+   <extends>QWidget</extends>
+   <header>qMRMLNodeComboBox.h</header>
+  </customwidget>
+  <customwidget>
+   <class>qMRMLWidget</class>
+   <extends>QWidget</extends>
+   <header>qMRMLWidget.h</header>
+   <container>1</container>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections>
+  <connection>
+   <sender>SimVascularMeshPrep</sender>
+   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+   <receiver>inputMeshSelector</receiver>
+   <slot>setMRMLScene(vtkMRMLScene*)</slot>
+  </connection>
+ </connections>
+</ui>
