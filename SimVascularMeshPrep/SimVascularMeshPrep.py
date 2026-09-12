@@ -81,6 +81,14 @@ SOLID_OPACITY = 0.8
 # What the transparency button drops to, and comes back from.
 TRANSPARENT_OPACITY = 0.4
 
+# Priority the 3D view's mouse events are observed at, which has to be above zero. The
+# view's own camera widget observes them at zero and aborts the left button press once it
+# has taken it to start a rotate, so an observer added at zero -- after that one, which is
+# where equal priority puts it -- is never told a button went down at all. Above zero is
+# ahead of it. Nothing here aborts anything, so the camera still rotates and zooms as it
+# did; this only buys the right to watch.
+VIEW_EVENT_PRIORITY = 1.0
+
 
 class SimVascularMeshPrep(ScriptedLoadableModule):
     def __init__(self, parent):
@@ -114,6 +122,7 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         self._lookup = None
         self._hovered = None
         self._pressedAt = None
+        self._cameraDrag = False
         self._viewObservers = []
         self._pickingFailed = False
 
@@ -183,9 +192,17 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
 
     def exit(self):
         """Leaving it. The views are let go of: moving the mouse over a 3D view while some
-        other module is open has nothing to do with this panel's table."""
+        other module is open has nothing to do with this panel's table.
+
+        The highlight goes back to the selected row on the way out. Whatever the cursor
+        happened to be over as the panel closed is not something anything still on screen
+        says, and leaving it there is a view disagreeing with a table nobody can see.
+        """
         self.stopObservingThreeDViews()
         self._hovered = None
+        self._pressedAt = None
+        self._cameraDrag = False
+        self.onSelectionChanged()
 
     def onSceneEndImport(self, caller=None, event=None):
         self.restoreFromParameterNode()
@@ -255,6 +272,8 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         pick. Nothing aborts the event, so the camera still rotates and zooms as it did.
         """
         self.stopObservingThreeDViews()
+        self._pressedAt = None
+        self._cameraDrag = False
         layoutManager = slicer.app.layoutManager()
         if layoutManager is None:
             return
@@ -265,9 +284,15 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
                 (vtk.vtkCommand.MouseMoveEvent, self.onViewMouseMove),
                 (vtk.vtkCommand.LeftButtonPressEvent, self.onViewButtonPress),
                 (vtk.vtkCommand.LeftButtonReleaseEvent, self.onViewButtonRelease),
+                (vtk.vtkCommand.MiddleButtonPressEvent, self.onViewCameraPress),
+                (vtk.vtkCommand.MiddleButtonReleaseEvent, self.onViewCameraRelease),
+                (vtk.vtkCommand.RightButtonPressEvent, self.onViewCameraPress),
+                (vtk.vtkCommand.RightButtonReleaseEvent, self.onViewCameraRelease),
             ):
                 tag = interactor.AddObserver(
-                    event, lambda caller, e, v=view, h=handler: self.callHandler(h, v)
+                    event,
+                    lambda caller, e, v=view, h=handler: self.callHandler(h, v),
+                    VIEW_EVENT_PRIORITY,
                 )
                 self._viewObservers.append((interactor, tag))
 
@@ -296,30 +321,61 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         self._viewObservers = []
 
     def faceUnderCursor(self, view):
-        """The face id under the cursor in this view, or None."""
+        """The face id under the cursor in this view, or None.
+
+        The mesh's own boundary is intersected with the ray the cursor looks down, rather
+        than the 3D view being asked what it drew there. Two reasons, both learned from
+        vtkMRMLModelDisplayableManager::Pick. It is a software ray cast over every cell
+        drawn, with no locator behind it, so on a mesh this size it costs a third of a
+        second -- and this runs once per mouse move, which a camera cannot be dragged
+        through. And it answers in a position, which then has to be matched back to a face
+        by proximity; the boundary's own locator answers in the cell it hit, which carries
+        the face id already.
+
+        The cost of asking the mesh rather than the view is that another model in front of
+        the mesh no longer hides it. Nothing is normally in front of it but this module's
+        own highlight, which is the same surface.
+        """
         if self._lookup is None:
             return None
-        node = self.ui.inputMeshSelector.currentNode()
-        if node is None:
-            return None
-        manager = view.displayableManagerByClassName("vtkMRMLModelDisplayableManager")
-        if manager is None:
+        renderer = view.renderWindow().GetRenderers().GetFirstRenderer()
+        if renderer is None:
             return None
         x, y = view.interactor().GetEventPosition()
-        if not manager.Pick(x, y):
-            return None
-        # Only the mesh itself and the face drawn on top of it count as the mesh: a pick
-        # landing on anything else in the scene is not a face of it.
-        picked = manager.GetPickedNodeID()
-        highlight = self.logic.highlightNode()
-        if picked not in (node.GetID(), highlight.GetID() if highlight else None):
-            return None
-        # Returns the position rather than filling one: GetPickedRAS() takes no arguments.
-        ras = manager.GetPickedRAS()
-        return self.logic.faceAtPosition(self._lookup, ras, self.logic.pickTolerance(node))
+        return self.logic.faceAlongRay(
+            self._lookup,
+            self.displayToWorld(renderer, x, y, 0.0),
+            self.displayToWorld(renderer, x, y, 1.0),
+        )
+
+    @staticmethod
+    def displayToWorld(renderer, x, y, z):
+        """A point on the ray under (x, y): z of 0 is the near plane, 1 the far one.
+
+        The interactor's event position is measured from the bottom left of the view, which
+        is the renderer's own convention, so it goes in as it comes out. Worth saying
+        because the displayable manager's Pick is the exception -- it takes a y measured
+        from the top -- and handing that one an event position mirrors every pick about the
+        middle of the view, which is a wrong answer rather than no answer.
+        """
+        renderer.SetDisplayPoint(float(x), float(y), float(z))
+        renderer.DisplayToWorld()
+        point = list(renderer.GetWorldPoint())
+        if not point[3]:
+            return point[:3]
+        return [coordinate / point[3] for coordinate in point[:3]]
 
     def onViewMouseMove(self, view):
-        """Show whichever face the cursor is over, without disturbing the selection."""
+        """Show whichever face the cursor is over, without disturbing the selection.
+
+        Nothing happens while a mouse button is held. A button down in a 3D view means the
+        camera is being moved -- turned, panned or zoomed -- and then it is the model that
+        travels past a cursor holding still, rather than somebody pointing at one face
+        after another. Following it would flicker the highlight through every face the
+        anatomy happens to sweep through on the way round.
+        """
+        if self._pressedAt is not None or self._cameraDrag:
+            return
         faceId = self.faceUnderCursor(view)
         if faceId == self._hovered:
             return
@@ -328,13 +384,20 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
             # Back to the row that is selected, which is what the highlight otherwise says.
             self.onSelectionChanged()
             return
+        self.showFace(faceId)
+
+    def showFace(self, faceId):
+        """Draw one face of the selected mesh over it, edged to match the mesh."""
         node = self.ui.inputMeshSelector.currentNode()
+        if node is None or node.GetMesh() is None:
+            return
         display = node.GetDisplayNode()
         self.logic.highlight(
             node.GetMesh(),
             faceId,
             self.ui.faceIdArrayLineEdit.text,
             showEdges=bool(display and display.GetEdgeVisibility()),
+            boundary=self._lookup[0] if self._lookup else None,
         )
 
     def onViewButtonPress(self, view):
@@ -347,20 +410,55 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         if pressedAt is None:
             return
         if abs(released[0] - pressedAt[0]) > 2 or abs(released[1] - pressedAt[1]) > 2:
+            # The camera was turned rather than a face chosen. Hovering was held off for
+            # the whole drag, so the highlight is still on whatever the cursor was over
+            # when it started; it is caught up here rather than left wrong until the mouse
+            # next moves, which may be a while if the operator stops to look.
+            self.onViewMouseMove(view)
             return
         faceId = self.faceUnderCursor(view)
         if faceId is not None:
             self.selectFace(faceId)
 
+    def onViewCameraPress(self, view):
+        """A middle or right button going down: the start of a pan or a zoom.
+
+        Only that it happened is recorded, not where. Neither gesture can be meant as a
+        click on a face -- the left button is the one that picks -- so there is nothing to
+        tell a drag from a click for, and any release ends it.
+        """
+        self._cameraDrag = True
+
+    def onViewCameraRelease(self, view):
+        self._cameraDrag = False
+        self.onViewMouseMove(view)
+
     def selectFace(self, faceId):
-        """Select a face's row in the table, scrolling to it if it is out of sight."""
+        """Select a face's row and open its name for typing, scrolling to it if need be.
+
+        Clicking a cap in the 3D view is somebody saying "this one is the azygous vein",
+        so it leaves the cursor in the name cell ready for them to say it. The row is
+        reached through the name cell rather than selected separately: the table selects
+        whole rows, so setting the current cell selects the row as well, and doing it once
+        means the highlight is rebuilt once rather than twice.
+        """
         table = self.ui.facesTable
         for row, face in enumerate(self._measured):
             if face.face_id == faceId:
-                table.selectRow(row)
-                item = table.item(row, 0)
+                item = table.item(row, NAME_COLUMN)
+                table.setCurrentCell(row, NAME_COLUMN)
                 if item is not None:
                     table.scrollToItem(item)
+                    # Typing a name replaces whatever is there, which is what renaming a
+                    # cap_3 to the vessel it is wants. Qt selects the text for us.
+                    #
+                    # Not opened twice. Clicking the same cap again -- looking at it once
+                    # more before naming it, say -- leaves the editor already up, and Qt
+                    # answers a second request to open it with "editing failed" in the
+                    # log. Despite the name, isPersistentEditorOpen reports any editor on
+                    # the cell, which is the question being asked.
+                    if not table.isPersistentEditorOpen(item):
+                        table.editItem(item)
                 return True
         return False
 
@@ -416,7 +514,13 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
                     f"{face.flatness:.4f}",
                 )
                 for column, value in enumerate(values):
-                    item = table.item(row, column) or qt.QTableWidgetItem()
+                    # Reused where there is one already, and only handed to the table when
+                    # it is new: setItem on an item the table already owns is refused, with
+                    # a Qt warning per cell that buries everything else in the log.
+                    item = table.item(row, column)
+                    if item is None:
+                        item = qt.QTableWidgetItem()
+                        table.setItem(row, column, item)
                     item.setText(value)
                     if column == NAME_COLUMN:
                         item.setFlags(item.flags() | qt.Qt.ItemIsEditable)
@@ -431,7 +535,6 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
                               "condition on it would say.")
                         )
                         item.setForeground(qt.QBrush(qt.QColor(200, 120, 0)))
-                    table.setItem(row, column, item)
         finally:
             self._updating = False
         self.updateButtons()
@@ -460,13 +563,7 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         if face is None or node is None or node.GetMesh() is None:
             self.clearHighlight()
             return
-        display = node.GetDisplayNode()
-        self.logic.highlight(
-            node.GetMesh(),
-            face.face_id,
-            self.ui.faceIdArrayLineEdit.text,
-            showEdges=bool(display and display.GetEdgeVisibility()),
-        )
+        self.showFace(face.face_id)
 
     def clearHighlight(self):
         self.logic.clearHighlight()
@@ -669,27 +766,15 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
         )
 
     @staticmethod
-    def pickTolerance(node):
-        """How far from the boundary a picked point may be and still be on a face.
-
-        A pick that landed on this mesh is on its surface, so this only has to absorb the
-        picker's own rounding -- but it is taken from the mesh's size rather than written
-        down, so that it means the same on a coronary as on a whole thorax.
-        """
-        bounds = [0.0] * 6
-        node.GetRASBounds(bounds)
-        diagonal = sum((bounds[i * 2 + 1] - bounds[i * 2]) ** 2 for i in range(3)) ** 0.5
-        return max(diagonal * 0.01, 1e-6)
-
-    @staticmethod
     def faceLookup(mesh, arrayName):
-        """What is needed to answer "which face is at this point": the boundary, its face
+        """What is needed to answer "which face is under this ray": the boundary, its face
         ids, and a locator over it.
 
-        The position is used rather than the cell id a pick also returns, because that id
-        indexes the polydata the display pipeline built to draw the node -- for an
-        unstructured grid, not the grid's own cells -- and the mapping back is not ours to
-        rely on. A point is a point.
+        The boundary is rebuilt here rather than the cell id a view pick returns being
+        used, because that id indexes the polydata the display pipeline built to draw the
+        node -- for an unstructured grid, not the grid's own cells -- and the mapping back
+        is not ours to rely on. Built once per mesh and held, because it is what every
+        hover and every highlight reads.
         """
         boundary = faces.boundary_of(mesh)
         ids = vtk_to_numpy(boundary.GetCellData().GetArray(arrayName)).astype(np.int64)
@@ -699,15 +784,23 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
         return boundary, ids, locator
 
     @staticmethod
-    def faceAtPosition(lookup, position, tolerance):
-        """The face id of the boundary cell nearest a point, or None if none is near it."""
-        boundary, ids, locator = lookup
-        closest = [0.0, 0.0, 0.0]
-        cellId = vtk.reference(0)
+    def faceAlongRay(lookup, start, end):
+        """The face id of the first boundary cell the segment start -> end crosses, or None.
+
+        No tolerance: the ray either goes through a cell of the boundary or it does not,
+        and a cursor that is off the mesh has to report nothing rather than the nearest
+        face to a line that missed.
+        """
+        _boundary, ids, locator = lookup
+        crossing = [0.0, 0.0, 0.0]
+        parametric = [0.0, 0.0, 0.0]
+        along = vtk.reference(0.0)
         subId = vtk.reference(0)
-        distance2 = vtk.reference(0.0)
-        locator.FindClosestPoint(list(position), closest, cellId, subId, distance2)
-        if int(cellId) < 0 or float(distance2) > tolerance * tolerance:
+        cellId = vtk.reference(0)
+        hit = locator.IntersectWithLine(
+            list(start), list(end), 0.0, along, crossing, parametric, subId, cellId
+        )
+        if not hit or int(cellId) < 0:
             return None
         return int(ids[int(cellId)])
 
@@ -756,18 +849,22 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
         display.SetScalarVisibility(True)
 
     # -- the highlight -----------------------------------------------------
-    def highlight(self, mesh, faceId, faceIdArrayNames, showEdges=False):
+    def highlight(self, mesh, faceId, faceIdArrayNames, showEdges=False, boundary=None):
         """Put one face of the mesh in a node of its own, so it can be seen.
 
         The node is not saved with the scene and is hidden from the editors, so it stays
         out of the subject hierarchy and out of every node selector: it is a way of
         looking at the mesh, not a thing the case has. Hidden before it is added, because
         the subject hierarchy takes its item from a node as it arrives.
+
+        `boundary` is the mesh's boundary if the caller already has it. Worth passing: it
+        is a quarter of a second to extract on a mesh of a million cells, against the
+        millisecond the one face then costs, and hovering asks for a face per mouse move.
         """
         arrayName = self.faceIdArrayName(mesh, faceIdArrayNames)
         if arrayName is None:
             return None
-        surface = faces.boundary_of(mesh)
+        surface = faces.boundary_of(mesh) if boundary is None else boundary
         ids = vtk_to_numpy(surface.GetCellData().GetArray(arrayName)).astype(np.int64)
         selected = np.flatnonzero(ids == faceId)
         face = cells.as_polydata(cells.extract(surface, selected))
@@ -883,17 +980,20 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         logic.clearHighlight()
         self.assertIsNone(logic.highlightNode())
 
-        # Picking a face by where it is, which is what hovering over one comes down to.
+        # Picking a face along a ray, which is what hovering over one comes down to: the
+        # cursor is a line through the scene, and the face is the first one it crosses.
+        # The fixture is the unit cube, face 2 its bottom and face 3 its top.
         lookup = logic.faceLookup(mesh, "CellEntityIds")
-        node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", "for picking")
-        node.SetAndObserveMesh(mesh)
-        tolerance = logic.pickTolerance(node)
-        caps = [face for face in measured if face is not wall]
-        for face in caps:
-            self.assertEqual(logic.faceAtPosition(lookup, face.centroid, tolerance), face.face_id)
-        # Nothing is under a point away from the mesh, and the wall's own centroid is
-        # inside the lumen rather than on it.
-        self.assertIsNone(logic.faceAtPosition(lookup, (0.5, 0.5, 50.0), tolerance))
+        self.assertEqual(logic.faceAlongRay(lookup, (0.5, 0.5, 2.0), (0.5, 0.5, -1.0)), 3)
+        self.assertEqual(logic.faceAlongRay(lookup, (0.5, 0.5, -1.0), (0.5, 0.5, 2.0)), 2)
+        self.assertEqual(logic.faceAlongRay(lookup, (-1.0, 0.5, 0.5), (2.0, 0.5, 0.5)), 1)
+        # The near face, not whichever the locator reaches first: looking down on the cube
+        # from above has to name its top, though the same line leaves through its bottom.
+        self.assertEqual(logic.faceAlongRay(lookup, (0.5, 0.5, 9.0), (0.5, 0.5, -9.0)), 3)
+        # A cursor off the mesh is over nothing, rather than over the nearest face to a
+        # line that missed. A ray beside the cube and one stopping short of it both miss.
+        self.assertIsNone(logic.faceAlongRay(lookup, (2.0, 2.0, -1.0), (2.0, 2.0, 2.0)))
+        self.assertIsNone(logic.faceAlongRay(lookup, (0.5, 0.5, 9.0), (0.5, 0.5, 4.0)))
 
         # A scene with nowhere to write to suggests nowhere, rather than Documents.
         self.assertEqual(logic.suggestedOutputDirectory(), "")
