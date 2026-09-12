@@ -115,6 +115,7 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         self._hovered = None
         self._pressedAt = None
         self._viewObservers = []
+        self._pickingFailed = False
 
     def setup(self):
         ScriptedLoadableModuleWidget.setup(self)
@@ -217,10 +218,6 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
                 self.ui.inputMeshSelector.setCurrentNode(mesh)
         finally:
             self._updating = False
-        self._lookup = None
-        self._hovered = None
-        self._pressedAt = None
-        self._viewObservers = []
         self.onMeshChanged()
 
     def saveToParameterNode(self):
@@ -270,9 +267,28 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
                 (vtk.vtkCommand.LeftButtonReleaseEvent, self.onViewButtonRelease),
             ):
                 tag = interactor.AddObserver(
-                    event, lambda caller, e, v=view, h=handler: h(v)
+                    event, lambda caller, e, v=view, h=handler: self.callHandler(h, v)
                 )
                 self._viewObservers.append((interactor, tag))
+
+    def callHandler(self, handler, view):
+        """Run a view handler, reporting the first exception rather than losing it.
+
+        VTK discards what an observer callback raises, so a mistake in one of these is
+        invisible from the outside: the cursor moves, nothing happens, nothing is said.
+        Reported once because a mouse move fires often enough to fill a log in seconds.
+        """
+        try:
+            handler(view)
+        except Exception:
+            if not self._pickingFailed:
+                self._pickingFailed = True
+                logging.exception("Mesh Prep could not pick a face in the 3D view")
+                self.setStatus(
+                    _("Picking faces in the 3D view failed; see the error log. The table "
+                      "still works."),
+                    warning=True,
+                )
 
     def stopObservingThreeDViews(self):
         for interactor, tag in self._viewObservers:
@@ -298,8 +314,8 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         highlight = self.logic.highlightNode()
         if picked not in (node.GetID(), highlight.GetID() if highlight else None):
             return None
-        ras = [0.0, 0.0, 0.0]
-        manager.GetPickedRAS(ras)
+        # Returns the position rather than filling one: GetPickedRAS() takes no arguments.
+        ras = manager.GetPickedRAS()
         return self.logic.faceAtPosition(self._lookup, ras, self.logic.pickTolerance(node))
 
     def onViewMouseMove(self, view):
@@ -418,10 +434,6 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
                     table.setItem(row, column, item)
         finally:
             self._updating = False
-        self._lookup = None
-        self._hovered = None
-        self._pressedAt = None
-        self._viewObservers = []
         self.updateButtons()
 
     # -- naming ------------------------------------------------------------
