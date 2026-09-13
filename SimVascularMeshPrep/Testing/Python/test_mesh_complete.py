@@ -286,3 +286,32 @@ def test_a_real_material_array_is_refused_rather_than_read_as_faces(tmp_path):
         mesh_complete.write_mesh_complete(
             raw, synthetic_mesh.cube_face_table(), tmp_path / "mesh"
         )
+
+
+def test_a_renamed_face_does_not_leave_its_old_file_behind(tmp_path):
+    """Naming is iterative, so the folder has to hold the faces of this write and no more.
+
+    solver.xml's Add_face list is built by reading mesh-surfaces/, so a file left over
+    from an earlier name is an extra face standing on cells another face already stands
+    on -- which the solver takes at face value.
+    """
+    mesh = synthetic_mesh.cube_mesh()
+    raw = io.write_dataset(mesh, tmp_path / "geometry" / "volume_mesh.vtu")
+    mesh_dir = tmp_path / "mesh"
+
+    first = mesh_complete.write_mesh_complete(
+        raw, FaceTable([Face(1, "wall"), Face(2, "cap_1"), Face(3, "cap_2")]), mesh_dir
+    )
+    assert (mesh_dir / "mesh-surfaces" / "cap_1.vtp").is_file()
+
+    # The same mesh, with the caps named after the vessels they turned out to be.
+    second = mesh_complete.write_mesh_complete(
+        raw,
+        FaceTable([Face(1, "wall"), Face(2, "cap_RSVC"), Face(3, "cap_lpa_a")]),
+        mesh_dir,
+    )
+    written = {path.name for path in (mesh_dir / "mesh-surfaces").glob("*.vtp")}
+    assert written == {"wall.vtp", "cap_RSVC.vtp", "cap_lpa_a.vtp"}
+    assert set(second.face_surfaces) == {"wall", "cap_RSVC", "cap_lpa_a"}
+    # And the mesh itself is unchanged by the renaming.
+    assert second.number_of_elements == first.number_of_elements

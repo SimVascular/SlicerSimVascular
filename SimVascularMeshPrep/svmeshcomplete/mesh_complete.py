@@ -338,6 +338,7 @@ def _check_face_ids(face_ids, volume_cells, boundary_cells, face_table: FaceTabl
 def _write_all(exterior, volume, face_table: FaceTable, mesh_dir: Path) -> dict:
     surfaces_dir = mesh_dir / MESH_SURFACES_DIR_NAME
     surfaces_dir.mkdir(parents=True, exist_ok=True)
+    _clear_previous_faces(mesh_dir, surfaces_dir)
     written = {
         "volume": io.write_dataset(volume, mesh_dir / VOLUME_MESH_NAME),
         "exterior": io.write_dataset(exterior, mesh_dir / EXTERIOR_SURFACE_NAME),
@@ -365,6 +366,27 @@ def _write_all(exterior, volume, face_table: FaceTable, mesh_dir: Path) -> dict:
         for index, region in enumerate(regions)
     ] if len(regions) > 1 else []
     return written
+
+
+def _clear_previous_faces(mesh_dir: Path, surfaces_dir: Path) -> None:
+    """Drop the per-face files an earlier write of this folder left behind.
+
+    A face file is named after its face, so renaming a face -- which is most of what
+    naming them is -- writes a new file and leaves the old name sitting there. Nothing
+    downstream can tell that one from a face of this mesh: an `Add_face` list is built by
+    reading this folder, so a stale `cap_3.vtp` becomes an extra face standing on
+    elements another face already stands on, and the solver binds two boundary conditions
+    to the same cells.
+
+    Only what this writer puts here is removed. Anything else kept in `mesh/` is left
+    alone, and the folder is derived from the scene in any case.
+    """
+    for path in surfaces_dir.glob("*.vtp"):
+        path.unlink()
+    # A wall that used to come apart into pieces and now does not would otherwise leave
+    # the pieces behind as well.
+    for path in mesh_dir.glob(WALLS_COMBINED_REGION_NAME.format(index="*")):
+        path.unlink()
 
 
 def _connected_regions(surface):
