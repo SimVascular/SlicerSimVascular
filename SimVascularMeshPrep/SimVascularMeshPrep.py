@@ -5,12 +5,29 @@ on, every cell carrying a face id. svMultiPhysics reads a folder: the volume ele
 under `GlobalNodeID`/`GlobalElementID`, the exterior under `ModelFaceID`, and one file per
 named face, which is what its boundary conditions bind to. No mesher writes any of that.
 
-Between the two sits a step nothing can do for you. A face id is a number; a boundary
-condition is per vessel. Somebody has to say which cap is the azygous vein -- and the names
-they give become the `mesh-surfaces/` file names, and through them the `Add_face` and
-`Add_BC` names in `solver.xml`, so they are what every result comes back labelled with.
-That is what this panel is for: the faces measured and listed, the selected one shown in
-the 3D view, a name typed against it.
+Between the two sits naming. A face id is a number; a boundary condition is per vessel.
+Somebody has to say which cap is the azygous vein -- and the names they give become the
+`mesh-surfaces/` file names, and through them the `Add_face` and `Add_BC` names in
+`solver.xml`, so they are what every result comes back labelled with. That is what this
+panel is for: the faces measured and listed, the selected one shown in the 3D view, a name
+against it.
+
+## Where the names come from
+
+Usually not from typing. A mesh clipped in Clip Vessel arrives with the names already on it:
+the vessel names are the labels on the clip points, Clip Vessel records which control point
+named each face, and CFD Mesh Generator carries that record onto the volume mesh. This panel
+follows it, so a Fontan case with twenty-six faces opens named rather than empty. The chain
+is the node reference and attributes named in the constants below; a mesh from anywhere else
+carries none of them, and then every name is typed here, as it always was.
+
+What is typed is an *override*, not the name: the panel keeps the overrides and works the
+inherited names out again on every load, so there is no second copy of a label to go stale.
+Renaming a clip point renames the face; typing over it makes it stick; clearing the cell
+takes the inherited name back. Inherited names are drawn dimmed and italic, because the risk
+of a name you did not choose is that it looks like one you did -- `cap_Outlet_1` off Clip
+Vessel's positional default reads exactly like a decision, and noticing that is the point of
+having a panel at all.
 
 ## Where the geometry is
 
@@ -67,6 +84,24 @@ FACE_ID_ARRAY_PARAMETER = "FaceIdArrayNames"
 OUTPUT_DIRECTORY_PARAMETER = "OutputDirectory"
 INPUT_MESH_REFERENCE = "InputMesh"
 
+# Where Clip Vessel recorded which of its clip points named each face, carried onto the volume
+# mesh by CFD Mesh Generator. The node reference names the markups node the names are control
+# point labels of; the attribute says which control point each face id came from, keyed by
+# control point ID so that deleting a clip point cannot move a name onto its neighbour's face.
+#
+# Strings rather than an import: Clip Vessel is in another extension, which this one does not
+# depend on and which may not be installed. A mesh from anywhere else simply carries none of
+# these, and then every name is typed here, as it was before.
+CLIP_POINTS_NODE_REFERENCE = "ClipPoints"
+FACE_ID_TO_CLIP_POINT_ID_ATTRIBUTE = "ClipVessel.FaceIdToClipPointID"
+WALL_FACE_ID_ATTRIBUTE = "ClipVessel.WallFaceID"
+
+# How an inherited name is drawn: the same text a typed name would be, in italic and dimmed.
+# Worth the trouble because the risk of inheriting names is that they look like chosen ones --
+# `cap_Outlet_1` off a positional default reads exactly like a name somebody decided on, and
+# noticing that is what this panel is for.
+INHERITED_NAME_COLOR = qt.QColor(128, 128, 128)
+
 # The highlight's own node, kept out of the way of anything the operator has, and the
 # colour it is drawn in: yellow against the grey the mesh sits at.
 HIGHLIGHT_NODE_NAME = "Mesh Prep face highlight"
@@ -117,7 +152,15 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         VTKObservationMixin.__init__(self)
         self.logic = None
         self._measured = []
-        self._names = {}
+        # What was typed, which is not the same as what the faces are called. The names shown
+        # are `override or inherited`: see effectiveNames(). Only the overrides are saved --
+        # the inherited ones are worked out again on every load, so that they cannot go stale
+        # against the clip points they came from.
+        self._overrides = {}
+        self._inherited = {}
+        self._inheritedNotes = ()
+        self._wallFaceId = None
+        self._clipPointsNode = None
         self._updating = False
         self._lookup = None
         self._hovered = None
@@ -209,7 +252,8 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
 
     def onSceneEndClose(self, caller=None, event=None):
         self._measured = []
-        self._names = {}
+        self._overrides = {}
+        self.forgetInheritedNames()
         self.populateTable()
 
     # -- state that is saved with the scene ---------------------------------
@@ -223,7 +267,10 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
             return
         self._updating = True
         try:
-            self._names = self.logic.readNamesParameter(node.GetParameter(NAMES_PARAMETER))
+            # What a saved scene holds is read back as overrides, which is what it is: before
+            # there was anything to inherit every name was typed, so an old scene is a scene
+            # of nothing but overrides and loads correctly under the new rule.
+            self._overrides = self.logic.readNamesParameter(node.GetParameter(NAMES_PARAMETER))
             arrayNames = node.GetParameter(FACE_ID_ARRAY_PARAMETER)
             if arrayNames:
                 self.ui.faceIdArrayLineEdit.text = arrayNames
@@ -242,7 +289,7 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         if node is None:
             return
         was_modifying = node.StartModify()
-        node.SetParameter(NAMES_PARAMETER, self.logic.writeNamesParameter(self._names))
+        node.SetParameter(NAMES_PARAMETER, self.logic.writeNamesParameter(self._overrides))
         node.SetParameter(FACE_ID_ARRAY_PARAMETER, self.ui.faceIdArrayLineEdit.text)
         node.SetParameter(
             OUTPUT_DIRECTORY_PARAMETER, self.ui.outputDirectoryPathLineEdit.currentPath or ""
@@ -462,12 +509,83 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
                 return True
         return False
 
+    # -- which name a face has ---------------------------------------------
+    def effectiveNames(self):
+        """What the faces are called: what was typed, and the clip's own name where nothing was.
+
+        The one rule the rest of the panel reads names through. An override wins, an empty
+        override is not an override - clearing a cell puts the inherited name back rather than
+        blanking a face that has a perfectly good name upstream - and a face with neither is
+        left empty, which is what the table shows as still to name.
+        """
+        return {face.face_id: (self._overrides.get(face.face_id)
+                               or self._inherited.get(face.face_id, ""))
+                for face in self._measured}
+
+    def isInherited(self, faceId):
+        """Whether the name shown for a face is the clip's rather than one somebody typed."""
+        return not self._overrides.get(faceId) and bool(self._inherited.get(faceId))
+
+    def forgetInheritedNames(self):
+        """Drop what was inherited, and stop watching the clip points it came from."""
+        if self._clipPointsNode is not None:
+            self.removeObserver(self._clipPointsNode,
+                                slicer.vtkMRMLMarkupsNode.PointModifiedEvent,
+                                self.onClipPointsChanged)
+            self.removeObserver(self._clipPointsNode,
+                                slicer.vtkMRMLMarkupsNode.PointRemovedEvent,
+                                self.onClipPointsChanged)
+            self._clipPointsNode = None
+        self._inherited = {}
+        self._inheritedNotes = ()
+        self._wallFaceId = None
+
+    def readInheritedNames(self, node):
+        """Work out what this mesh's faces are already called, and watch for that changing.
+
+        Observed rather than read once: renaming a clip point in Clip Vessel has to show up
+        here, and a deleted clip point has to take its face's name away. Those are the two
+        events a label can move under - a label change fires PointModified and nothing else, a
+        deletion fires PointRemoved - and without them the panel would be showing names that
+        the scene no longer agrees with.
+        """
+        self.forgetInheritedNames()
+        if node is None:
+            return
+        derived = self.logic.inheritedNames(node)
+        self._inherited = dict(derived.names)
+        self._inheritedNotes = derived.notes
+        self._wallFaceId = self.logic.wallFaceId(node)
+        self._clipPointsNode = self.logic.clipPointsNode(node)
+        if self._clipPointsNode is not None:
+            self.addObserver(self._clipPointsNode,
+                             slicer.vtkMRMLMarkupsNode.PointModifiedEvent,
+                             self.onClipPointsChanged)
+            self.addObserver(self._clipPointsNode,
+                             slicer.vtkMRMLMarkupsNode.PointRemovedEvent,
+                             self.onClipPointsChanged)
+
+    def onClipPointsChanged(self, caller=None, event=None):
+        """A clip point was renamed or removed upstream, so the inherited names have moved.
+
+        Only the names are recomputed; the mesh has not changed, so nothing is re-measured.
+        """
+        node = self.ui.inputMeshSelector.currentNode()
+        if node is None or not self._measured:
+            return
+        derived = self.logic.inheritedNames(node)
+        self._inherited = dict(derived.names)
+        self._inheritedNotes = derived.notes
+        self.populateTable()
+        self.updateStatus()
+
     # -- reading the mesh --------------------------------------------------
     def onMeshChanged(self, _node=None):
         """Measure the selected mesh's faces, keeping any names already typed."""
         self._measured = []
         self._lookup = None
         self._hovered = None
+        self.forgetInheritedNames()
         node = self.ui.inputMeshSelector.currentNode()
         mesh = node.GetMesh() if node else None
         if mesh is None:
@@ -488,26 +606,40 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
 
         arrayName = self.logic.faceIdArrayName(mesh, self.ui.faceIdArrayLineEdit.text)
         self._lookup = self.logic.faceLookup(mesh, arrayName) if arrayName else None
-        for face in self._measured:
-            self._names.setdefault(face.face_id, "")
+        # Before the table, which draws inherited names differently from typed ones.
+        self.readInheritedNames(node)
         self.populateTable()
         self.saveToParameterNode()
         self.updateStatus()
         if not self.ui.outputDirectoryPathLineEdit.currentPath:
             self.ui.outputDirectoryPathLineEdit.currentPath = self.logic.suggestedOutputDirectory()
 
+    def wallFaceId(self):
+        """Which face is the wall: what the clip recorded, or the face with the most cells.
+
+        The guess is right almost always -- a wall has far more cells than any cap -- but it is
+        a guess, and it is wrong exactly where it matters: a wall split into several faces, or
+        a short vessel with one very large cap. Where the mesh came through Clip Vessel the
+        answer was written down, so it is not guessed at.
+        """
+        if self._wallFaceId is not None:
+            return self._wallFaceId
+        wall = max(self._measured, key=lambda face: face.cell_count, default=None)
+        return wall.face_id if wall is not None else None
+
     def populateTable(self):
         table = self.ui.facesTable
-        # The face with the most cells is the wall -- it has far more than any cap -- and
-        # is the one face flatness says nothing about.
-        wall = max(self._measured, key=lambda face: face.cell_count, default=None)
+        wallFaceId = self.wallFaceId()
+        names = self.effectiveNames()
+        labels = self.logic.inheritedLabels(self.ui.inputMeshSelector.currentNode())
+        clipPointsNode = self._clipPointsNode
         self._updating = True
         try:
             table.setRowCount(len(self._measured))
             for row, face in enumerate(self._measured):
                 values = (
                     str(face.face_id),
-                    self._names.get(face.face_id, ""),
+                    names.get(face.face_id, ""),
                     f"{face.cell_count:,}",
                     f"{face.area:.2f}",
                     f"{face.effective_diameter:.2f}",
@@ -524,10 +656,11 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
                     item.setText(value)
                     if column == NAME_COLUMN:
                         item.setFlags(item.flags() | qt.Qt.ItemIsEditable)
+                        self.styleNameCell(item, face.face_id, labels, clipPointsNode)
                     else:
                         item.setFlags(qt.Qt.ItemIsEnabled | qt.Qt.ItemIsSelectable)
                     if column == COLUMNS.index("Flatness") and self.logic.looksUnplanar(
-                        face, face is wall
+                        face, face.face_id == wallFaceId
                     ):
                         item.setToolTip(
                             _("Not planar, so this was not cut cleanly. Whatever this face "
@@ -539,13 +672,53 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
             self._updating = False
         self.updateButtons()
 
+    def styleNameCell(self, item, faceId, labels, clipPointsNode):
+        """Draw an inherited name as what it is: not typed here, and traceable to where it was.
+
+        Dimmed and italic, with a tooltip naming the clip point it came from. The styling is
+        the point of the whole panel applied to itself -- an operator has to be able to see at
+        a glance which of twenty-six names nobody has actually checked, and `cap_Outlet_1` off
+        a positional default is indistinguishable from a real name otherwise.
+        """
+        font = item.font()
+        inherited = self.isInherited(faceId)
+        font.setItalic(inherited)
+        item.setFont(font)
+        item.setForeground(qt.QBrush(INHERITED_NAME_COLOR) if inherited else qt.QBrush())
+        if not inherited:
+            item.setToolTip(_("Type a name for this face. It becomes the file name under "
+                              "mesh-surfaces/ and the solver's boundary condition name."))
+            return
+        label = labels.get(faceId) or ""
+        source = clipPointsNode.GetName() if clipPointsNode is not None else ""
+        item.setToolTip(
+            _("From the clip point “{label}” in “{node}”, not typed here. "
+              "Type over it to override; clear the cell to take this name back.").format(
+                label=label, node=source)
+        )
+
     # -- naming ------------------------------------------------------------
     def onNameEdited(self, row, column):
+        """Take what was typed as an override, or drop the override if the cell was cleared.
+
+        An emptied cell is not an empty name: it means "whatever the clip calls this", which is
+        the inherited name if there is one and still-to-name if there is not. Dropping the key
+        rather than storing "" keeps the saved scene to the names somebody actually chose.
+        """
         if self._updating or column != NAME_COLUMN:
             return
-        item = self.ui.facesTable.item(row, column)
-        self._names[self._measured[row].face_id] = (item.text() or "").strip()
+        faceId = self._measured[row].face_id
+        typed = (self.ui.facesTable.item(row, column).text() or "").strip()
+        if typed and typed != self._inherited.get(faceId):
+            self._overrides[faceId] = typed
+        else:
+            # Typing the inherited name back is not an override either: it is what the face is
+            # already called, and storing it would freeze it against a later rename upstream.
+            self._overrides.pop(faceId, None)
         self.saveToParameterNode()
+        # The cell has to be redrawn: it may have gone from typed to inherited or back, and the
+        # styling and the tooltip say which.
+        self.populateTable()
         self.updateStatus()
         self.updateButtons()
 
@@ -631,7 +804,7 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
             result = self.logic.export(
                 node.GetMesh(),
                 self._measured,
-                self._names,
+                self.effectiveNames(),
                 directory,
                 self.ui.faceIdArrayLineEdit.text,
             )
@@ -648,8 +821,9 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
 
     # -- panel state -------------------------------------------------------
     def updateButtons(self):
+        names = self.effectiveNames()
         named = self._measured and all(
-            self._names.get(face.face_id) for face in self._measured
+            names.get(face.face_id) for face in self._measured
         )
         self.ui.exportButton.enabled = bool(
             named and self.ui.outputDirectoryPathLineEdit.currentPath
@@ -667,7 +841,8 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         Not folded into updateButtons: that also runs when the output folder changes, and
         it would wipe out what an export had just reported.
         """
-        self.setStatus(self.logic.statusText(self._measured, self._names))
+        self.setStatus(self.logic.statusText(
+            self._measured, self._overrides, self._inherited, self._inheritedNotes))
 
     def setStatus(self, text, warning=False):
         self.ui.statusLabel.text = text
@@ -700,6 +875,77 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
                   "by its own 'Face ids array' field.").format(names=names)
             )
         return faces.measure_faces(mesh, arrayName)
+
+    # -- names inherited from upstream -------------------------------------
+    @staticmethod
+    def clipPointsNode(meshNode):
+        """The markups node whose control point labels name this mesh's faces, or None."""
+        if meshNode is None:
+            return None
+        return meshNode.GetNodeReference(CLIP_POINTS_NODE_REFERENCE)
+
+    @staticmethod
+    def wallFaceId(meshNode):
+        """The wall's face id as Clip Vessel recorded it, or None if nothing recorded it.
+
+        Worth having for its own sake: the wall is the one face flatness says nothing about,
+        and without this it has to be guessed at as the face with the most cells.
+        """
+        if meshNode is None:
+            return None
+        recorded = meshNode.GetAttribute(WALL_FACE_ID_ATTRIBUTE)
+        try:
+            return int(recorded)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def inheritedLabels(cls, meshNode):
+        """`{faceId: clip point label}` for the faces Clip Vessel recorded a name source for.
+
+        The labels are read from the markups node every time rather than from anything stored
+        on the mesh, which is what makes a rename upstream arrive here: there is no second copy
+        of a label to go stale.
+
+        A face whose control point has been deleted is kept, with an empty label. Dropping it
+        would be the same as never having recorded it, and the two are worth telling apart -
+        that face had a name and no longer has one, which is a thing to tell the operator.
+        """
+        markups = cls.clipPointsNode(meshNode)
+        recorded = meshNode.GetAttribute(FACE_ID_TO_CLIP_POINT_ID_ATTRIBUTE) if meshNode else None
+        if markups is None or not recorded:
+            return {}
+        try:
+            stored = json.loads(recorded)
+        except ValueError:
+            logging.warning("Mesh Prep could not read which clip point named each face of %s.",
+                            meshNode.GetName())
+            return {}
+        labels = {}
+        for faceId, controlPointId in stored.items():
+            try:
+                faceId = int(faceId)
+            except (TypeError, ValueError):
+                continue
+            index = markups.GetNthControlPointIndexByID(str(controlPointId))
+            labels[faceId] = markups.GetNthControlPointLabel(index) if index >= 0 else ""
+        return labels
+
+    @classmethod
+    def inheritedNames(cls, meshNode):
+        """The names this mesh's faces already have, from the clip they came out of.
+
+        The whole of the chain from a clip point label to a face name, read at this end: walk
+        the node reference, look each control point up by ID, and put the labels through the
+        package's sanitizer, which is also what the headless workflow scripts use - a case
+        packaged here and a case packaged from a terminal have to name their files the same.
+
+        :return: a `face_table.DerivedNames`, whose `notes` are worth showing: a duplicated
+          label upstream comes back numbered apart rather than as an error, and that is
+          something to say out loud rather than to resolve silently.
+        """
+        return face_table.names_from_labels(cls.inheritedLabels(meshNode),
+                                            wall_face_id=cls.wallFaceId(meshNode))
 
     @classmethod
     def looksUnplanar(cls, face, isWall):
@@ -805,16 +1051,37 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
         return int(ids[int(cellId)])
 
     @staticmethod
-    def statusText(measured, names):
-        """How many faces there are and how many are still to name."""
+    def statusText(measured, overrides=None, inherited=None, notes=()):
+        """How many faces there are, how many came named from the clip, and what is left to do.
+
+        The count of inherited names is said rather than left to the styling in the table: on a
+        Fontan case there are twenty-six faces and the operator's question on opening the panel
+        is how much of the work is already done.
+        """
         if not measured:
             return ""
-        unnamed = sum(1 for face in measured if not names.get(face.face_id))
-        if not unnamed:
-            return _("{count} faces, all named.").format(count=len(measured))
-        return _("{count} faces. {unnamed} still to name.").format(
-            count=len(measured), unnamed=unnamed
-        )
+        overrides = overrides or {}
+        inherited = inherited or {}
+        fromClip = sum(1 for face in measured
+                       if not overrides.get(face.face_id) and inherited.get(face.face_id))
+        unnamed = sum(1 for face in measured
+                      if not (overrides.get(face.face_id) or inherited.get(face.face_id)))
+
+        typedHere = len(measured) - fromClip - unnamed
+
+        parts = [_("{count} faces").format(count=len(measured))]
+        if not fromClip:
+            parts.append(_("{count} still to name").format(count=unnamed) if unnamed
+                         else _("all named"))
+        elif not unnamed and not typedHere:
+            parts.append(_("all named from Clip Vessel"))
+        else:
+            parts.append(_("{count} named from Clip Vessel").format(count=fromClip))
+            if unnamed:
+                parts.append(_("{count} still to name").format(count=unnamed))
+            else:
+                parts.append(_("{count} named here").format(count=typedHere))
+        return " ".join([", ".join(parts) + "."] + list(notes)).strip()
 
     @staticmethod
     def faceIdArrayName(mesh, faceIdArrayNames):
@@ -930,6 +1197,195 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         self.test_measureNamesAndExports()
         self.setUp()
         self.test_namesSurviveASavedScene()
+        self.setUp()
+        self.test_namesAreInheritedFromTheClip()
+        self.setUp()
+        self.test_overridesBeatInheritedNamesAndSurviveAScene()
+        self.setUp()
+        self.test_thePanelInheritsFollowsAndOverrides()
+
+    # -- inherited names ---------------------------------------------------
+    def recordedMesh(self, labels, faceIdsByIndex=(2, 3), wallFaceId=1):
+        """A volume mesh carrying Clip Vessel's record, as one out of CFD Mesh Generator does.
+
+        Built by hand rather than by running a clip: the clip is another extension's, and what
+        this module has to be held to is reading the record, not producing it.
+        """
+        from svmeshcomplete import testing
+
+        mesh = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", "volume mesh")
+        mesh.SetAndObserveMesh(testing.cube_mesh())
+        clipPoints = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode", "Clip points")
+        controlPointIds = []
+        for label in labels:
+            index = clipPoints.AddControlPoint([0.0, 0.0, 0.0])
+            clipPoints.SetNthControlPointLabel(index, label)
+            controlPointIds.append(clipPoints.GetNthControlPointID(index))
+        mesh.SetNodeReferenceID(CLIP_POINTS_NODE_REFERENCE, clipPoints.GetID())
+        mesh.SetAttribute(FACE_ID_TO_CLIP_POINT_ID_ATTRIBUTE, json.dumps(
+            {str(faceId): controlPointId
+             for faceId, controlPointId in zip(faceIdsByIndex, controlPointIds)}))
+        mesh.SetAttribute(WALL_FACE_ID_ATTRIBUTE, str(wallFaceId))
+        return mesh, clipPoints
+
+    def test_namesAreInheritedFromTheClip(self):
+        """A mesh out of Clip Vessel arrives named, which is the whole point of the chain."""
+        logic = SimVascularMeshPrepLogic()
+        mesh, clipPoints = self.recordedMesh(("Inlet", "Outlet 1"))
+
+        self.assertEqual(logic.wallFaceId(mesh), 1)
+        self.assertEqual(logic.clipPointsNode(mesh), clipPoints)
+        self.assertEqual(logic.inheritedNames(mesh).names,
+                         {1: "wall", 2: "cap_Inlet", 3: "cap_Outlet_1"})
+
+        # The labels are read from the markups node every time, so a rename upstream arrives.
+        clipPoints.SetNthControlPointLabel(0, "RSVC")
+        self.assertEqual(logic.inheritedNames(mesh).names[2], "cap_RSVC")
+
+        # A deleted clip point takes its own face's name and no other. Keying the record by
+        # control point ID is what buys this: by index, face 3's name would move onto face 2.
+        clipPoints.RemoveNthControlPoint(0)
+        derived = logic.inheritedNames(mesh)
+        self.assertNotIn(2, derived.names)
+        self.assertEqual(derived.names[3], "cap_Outlet_1")
+        self.assertTrue(derived.notes)
+
+        # A mesh from anywhere else carries no record, and then nothing is inherited.
+        from svmeshcomplete import testing
+        plain = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", "imported mesh")
+        plain.SetAndObserveMesh(testing.cube_mesh())
+        self.assertIsNone(logic.wallFaceId(plain))
+        self.assertEqual(logic.inheritedNames(plain).names, {})
+
+        # And a record that cannot be read is not a crash: the panel falls back to typing.
+        mesh.SetAttribute(FACE_ID_TO_CLIP_POINT_ID_ATTRIBUTE, "not json")
+        self.assertEqual(logic.inheritedLabels(mesh), {})
+
+        self.delayDisplay("Names inherited, followed, and dropped with their clip point")
+
+    def test_overridesBeatInheritedNamesAndSurviveAScene(self):
+        """Only what was typed is saved; the rest is worked out again from the clip.
+
+        Which is what keeps the two from disagreeing. A saved copy of an inherited name would
+        be a second answer to the same question, and the one on disk is the one that goes stale.
+        """
+        logic = SimVascularMeshPrepLogic()
+        mesh, clipPoints = self.recordedMesh(("Inlet", "Outlet 1"))
+        parameters = logic.getParameterNode()
+        parameters.SetParameter(FACE_ID_ARRAY_PARAMETER, "CellEntityIds, ModelFaceID")
+        parameters.SetNodeReferenceID(INPUT_MESH_REFERENCE, mesh.GetID())
+        # One typed name against two inherited ones.
+        parameters.SetParameter(NAMES_PARAMETER, logic.writeNamesParameter({3: "cap_azygous"}))
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = os.path.join(directory, "scene.mrb")
+            self.assertTrue(slicer.util.saveScene(bundle))
+            # The parameter node is a singleton and Clear() keeps the singletons, so it is
+            # taken out by hand - otherwise what comes back below is the node still in memory
+            # and this asserts nothing about the scene on disk. Not Clear(1), which takes the
+            # layout node with it and segfaults a running main window.
+            slicer.mrmlScene.Clear()
+            slicer.mrmlScene.RemoveNode(logic.getParameterNode())
+            self.assertEqual(
+                logic.readNamesParameter(logic.getParameterNode().GetParameter(NAMES_PARAMETER)),
+                {}, "the parameter node should be empty before the scene is read back")
+
+            self.assertTrue(slicer.util.loadScene(bundle))
+
+            logic = SimVascularMeshPrepLogic()
+            restored = logic.getParameterNode()
+            overrides = logic.readNamesParameter(restored.GetParameter(NAMES_PARAMETER))
+            self.assertEqual(overrides, {3: "cap_azygous"})
+
+            reloadedMesh = restored.GetNodeReference(INPUT_MESH_REFERENCE)
+            inherited = logic.inheritedNames(reloadedMesh).names
+            self.assertEqual(inherited, {1: "wall", 2: "cap_Inlet", 3: "cap_Outlet_1"})
+            # What the panel shows: the override where there is one, the clip's name otherwise.
+            effective = {faceId: overrides.get(faceId) or inherited.get(faceId, "")
+                         for faceId in (1, 2, 3)}
+            self.assertEqual(effective, {1: "wall", 2: "cap_Inlet", 3: "cap_azygous"})
+
+        self.delayDisplay("Overrides saved, inherited names rebuilt")
+
+    def test_thePanelInheritsFollowsAndOverrides(self):
+        """The three behaviours the split between overrides and inherited names buys.
+
+        Driven through the widget rather than the logic, because what is being checked is the
+        panel: that a mesh out of Clip Vessel opens named with Export already enabled, that a
+        rename upstream arrives without anything being reselected, and that typing and clearing
+        move a face between the two states. The styling is checked too - an inherited name has
+        to be visibly not a chosen one, and that is the only thing standing between an operator
+        and a positional default they never looked at.
+        """
+        import tempfile
+
+        widget = slicer.util.getModuleWidget("SimVascularMeshPrep")
+        mesh, clipPoints = self.recordedMesh(("Inlet", "Outlet 1"))
+        widget.ui.faceIdArrayLineEdit.text = "CellEntityIds, ModelFaceID"
+        # Export needs somewhere to write as well as every face named, and what is being
+        # checked below is the naming half of that.
+        widget.ui.outputDirectoryPathLineEdit.currentPath = tempfile.mkdtemp()
+        widget.ui.inputMeshSelector.setCurrentNode(mesh)
+
+        table = widget.ui.facesTable
+        self.assertEqual(table.rowCount, 3)
+
+        def shown():
+            return {int(table.item(row, 0).text()): table.item(row, NAME_COLUMN).text()
+                    for row in range(table.rowCount)}
+
+        def rowOf(faceId):
+            return [row for row in range(table.rowCount)
+                    if int(table.item(row, 0).text()) == faceId][0]
+
+        # It opens named, with nothing typed, and ready to export.
+        self.assertEqual(shown(), {1: "wall", 2: "cap_Inlet", 3: "cap_Outlet_1"})
+        self.assertEqual(widget._overrides, {})
+        self.assertTrue(widget.ui.exportButton.enabled,
+                        "a mesh out of Clip Vessel should open ready to export")
+        self.assertTrue(table.item(rowOf(2), NAME_COLUMN).font().italic(),
+                        "an inherited name has to be drawn as one")
+
+        # 1. Renamed upstream: the face name follows, with nothing reselected here.
+        clipPoints.SetNthControlPointLabel(0, "RSVC")
+        self.assertEqual(shown()[2], "cap_RSVC")
+
+        # 2. Typed over: it sticks, is no longer drawn as inherited, and stops following.
+        row = rowOf(2)
+        table.item(row, NAME_COLUMN).setText("cap_superior_vena_cava")
+        widget.onNameEdited(row, NAME_COLUMN)
+        self.assertEqual(widget._overrides, {2: "cap_superior_vena_cava"})
+        self.assertFalse(table.item(rowOf(2), NAME_COLUMN).font().italic())
+        clipPoints.SetNthControlPointLabel(0, "something else")
+        self.assertEqual(shown()[2], "cap_superior_vena_cava")
+
+        # 3. Cleared: the inherited name comes back rather than the face going blank.
+        row = rowOf(2)
+        table.item(row, NAME_COLUMN).setText("")
+        widget.onNameEdited(row, NAME_COLUMN)
+        self.assertEqual(widget._overrides, {})
+        self.assertEqual(shown()[2], "cap_something_else")
+        self.assertTrue(table.item(rowOf(2), NAME_COLUMN).font().italic())
+
+        # A deleted clip point leaves its face to be named, and blocks the export until it is.
+        clipPoints.RemoveNthControlPoint(0)
+        self.assertEqual(shown()[2], "")
+        self.assertEqual(shown()[3], "cap_Outlet_1")
+        self.assertFalse(widget.ui.exportButton.enabled)
+
+        # The wall is known rather than guessed, which is what flatness is judged against.
+        self.assertEqual(widget.wallFaceId(), 1)
+
+        # Selecting away and back is not something the panel may be left broken by: the
+        # observers on the clip points have to come off the old mesh and onto the new one.
+        widget.ui.inputMeshSelector.setCurrentNode(None)
+        self.assertEqual(widget._inherited, {})
+        self.assertIsNone(widget._clipPointsNode)
+        widget.ui.inputMeshSelector.setCurrentNode(mesh)
+        self.assertEqual(widget._clipPointsNode, clipPoints)
+
+        self.delayDisplay("The panel inherits, follows a rename, and takes an override")
 
     def test_measureNamesAndExports(self):
         import tempfile
@@ -1003,7 +1459,8 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         self.assertIn("3 still to name", logic.statusText(measured, {}))
         partly = {wall.face_id: "wall"}
         self.assertIn("2 still to name", logic.statusText(measured, partly))
-        blank = dict(names, **{wall.face_id: ""})
+        # Not dict(names, **{...}): the keys are face ids, and keyword expansion needs strings.
+        blank = {**names, wall.face_id: ""}
         self.assertIn("1 still to name", logic.statusText(measured, blank))
         self.assertIn("all named", logic.statusText(measured, names))
 
@@ -1044,9 +1501,14 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         scene = os.path.join(tempfile.mkdtemp(), "scene.mrb")
         self.assertTrue(slicer.util.saveScene(scene))
 
-        # Clear(1) removes the singletons too, so this looks like a fresh application
-        # rather than one that still had the parameter node in it.
-        slicer.mrmlScene.Clear(1)
+        # The parameter node is what must not survive, or this would be testing that a value
+        # is still in memory rather than that it came back off disk. It is a singleton, so it
+        # is taken out by hand: Clear(1) removes every singleton, and taking the layout node
+        # out from under a running main window segfaults the layout manager ("The layout to be
+        # removed is not the same as the stored one") - which made this test crash Slicer
+        # whenever it was run from the Reload and Test button rather than headless.
+        slicer.mrmlScene.Clear()
+        slicer.mrmlScene.RemoveNode(logic.getParameterNode())
         self.assertEqual(
             logic.readNamesParameter(logic.getParameterNode().GetParameter(NAMES_PARAMETER)), {}
         )
