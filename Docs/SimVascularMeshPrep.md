@@ -1,4 +1,4 @@
-# Mesh Complete Export
+# SimVascular Mesh Prep
 
 Turns a face-labelled volume mesh into the `mesh-complete` folder an svMultiPhysics case
 reads, and lets you name the faces on the way. The input is a volume mesh — typically one
