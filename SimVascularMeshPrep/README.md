@@ -3,12 +3,9 @@
 Name the faces of a volume mesh and write the `mesh-complete` folder an svMultiPhysics
 case reads.
 
-[![Naming a cap in the panel: hovering a face in the 3D view shows it on its own, clicking it selects its row and opens its name for typing](../Docs/SimVascularMeshPrep_demo.png)](../Docs/SimVascularMeshPrep_demo.mp4)
 
-**[▶ Play the demo](../Docs/SimVascularMeshPrep_demo.mp4)** (22 s, no sound) — a Fontan
-mesh of 24 faces. The table measures every one; hovering a face in the 3D view shows it
-on its own; clicking it selects its row and opens its name for typing. Export stays
-greyed out while the status line still reads faces left to name.
+https://github.com/user-attachments/assets/ba84ca4f-95b4-435b-9390-9e07b59ac5d2
+
 
 ## Why this is a step at all
 
