@@ -22,6 +22,7 @@ include(${Slicer_USE_FILE})
 add_subdirectory(SDFStent)
 add_subdirectory(PaintModel)
 add_subdirectory(FaceAwareRemesh)
+add_subdirectory(SimVascularMeshPrep)
 ## NEXT_MODULE
 
 #-----------------------------------------------------------------------------

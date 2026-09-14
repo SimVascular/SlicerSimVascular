@@ -1,0 +1,274 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SimVascularMeshPrep</class>
+ <widget class="qMRMLWidget" name="SimVascularMeshPrep">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>440</width>
+    <height>760</height>
+   </rect>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="ctkCollapsibleButton" name="inputCollapsibleButton">
+     <property name="text">
+      <string>Mesh</string>
+     </property>
+     <layout class="QFormLayout" name="inputFormLayout">
+      <item row="0" column="0">
+       <widget class="QLabel" name="inputMeshLabel">
+        <property name="text">
+         <string>Volume mesh:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <layout class="QHBoxLayout" name="inputMeshHorizontalLayout">
+        <item>
+       <widget class="qMRMLNodeComboBox" name="inputMeshSelector">
+        <property name="toolTip">
+         <string>The volume mesh to prepare, carrying a face id per cell - typically what CFD Mesh Generator handed back. Its boundary cells are the faces a solver binds its boundary conditions to.</string>
+        </property>
+        <property name="nodeTypes">
+         <stringlist notr="true">
+          <string>vtkMRMLModelNode</string>
+         </stringlist>
+        </property>
+        <property name="noneEnabled">
+         <bool>true</bool>
+        </property>
+        <property name="addEnabled">
+         <bool>false</bool>
+        </property>
+        <property name="removeEnabled">
+         <bool>false</bool>
+        </property>
+       </widget>
+        </item>
+        <item>
+         <widget class="QToolButton" name="meshEdgesButton">
+          <property name="toolTip">
+           <string>Show or hide the edges of the mesh cells. Pressing again turns them off.</string>
+          </property>
+          <property name="text">
+           <string/>
+          </property>
+          <property name="toolButtonStyle">
+           <enum>Qt::ToolButtonIconOnly</enum>
+          </property>
+          <property name="autoRaise">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QToolButton" name="meshColorsButton">
+          <property name="toolTip">
+           <string>Colour the mesh by its face ids, so that every face can be told from its neighbours at once. Pressing again turns it off.</string>
+          </property>
+          <property name="text">
+           <string/>
+          </property>
+          <property name="toolButtonStyle">
+           <enum>Qt::ToolButtonIconOnly</enum>
+          </property>
+          <property name="autoRaise">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QToolButton" name="meshTransparencyButton">
+          <property name="toolTip">
+           <string>Make the mesh half transparent, which is how a cap inside the anatomy is seen without hiding what surrounds it. Pressing again turns it back.</string>
+          </property>
+          <property name="text">
+           <string/>
+          </property>
+          <property name="toolButtonStyle">
+           <enum>Qt::ToolButtonIconOnly</enum>
+          </property>
+          <property name="autoRaise">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QToolButton" name="meshVisibilityButton">
+          <property name="toolTip">
+           <string>Show or hide the mesh. Hiding it is the other way to see a cap that sits inside the anatomy.</string>
+          </property>
+          <property name="text">
+           <string/>
+          </property>
+          <property name="toolButtonStyle">
+           <enum>Qt::ToolButtonIconOnly</enum>
+          </property>
+          <property name="autoRaise">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="faceIdArrayLabel">
+        <property name="text">
+         <string>Face ids array:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLineEdit" name="faceIdArrayLineEdit">
+        <property name="toolTip">
+         <string>Names of the cell array holding the face ids, separated by commas; the first one the mesh carries is used. "CellEntityIds" is VMTK's name and "ModelFaceID" is the one SimVascular reads a model's faces by. "MaterialIds" is Slicer's own material array and is listed last because CFD Mesh Generator puts the ids there when its input carried neither of the others, which a surface out of Clip Vessel does not. A mesh whose ids went somewhere else again needs that name adding here.</string>
+        </property>
+        <property name="text">
+         <string>CellEntityIds, ModelFaceID, MaterialIds</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="facesCollapsibleButton">
+     <property name="text">
+      <string>Faces</string>
+     </property>
+     <layout class="QVBoxLayout" name="facesVerticalLayout">
+      <item>
+       <widget class="QLabel" name="facesHelpLabel">
+        <property name="text">
+         <string>Name every face. The names become the mesh-surfaces file names, and through them the Add_face and Add_BC names in solver.xml, so they are what results come back labelled with. Use cap_ for a face the flow crosses and wall or wall_ for vessel wall.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QTableWidget" name="facesTable">
+        <property name="toolTip">
+         <string>One row per face of the mesh. Selecting a row shows that face on its own in the 3D view; use the buttons beside the mesh above to see past the anatomy around it. Area and diameter tell one small branch from another; flatness is the largest distance of any point from the face's own best-fit plane, so a cap cut normal to the vessel reads 0 and one that does not was not cut cleanly.</string>
+        </property>
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>260</height>
+         </size>
+        </property>
+        <property name="selectionBehavior">
+         <enum>QAbstractItemView::SelectRows</enum>
+        </property>
+        <property name="selectionMode">
+         <enum>QAbstractItemView::SingleSelection</enum>
+        </property>
+        <property name="alternatingRowColors">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="exportCollapsibleButton">
+     <property name="text">
+      <string>Export</string>
+     </property>
+     <layout class="QVBoxLayout" name="exportVerticalLayout">
+      <item>
+       <widget class="QLabel" name="exportHelpLabel">
+        <property name="text">
+         <string>Writes mesh-complete.mesh.vtu, mesh-complete.exterior.vtp, walls_combined.vtp and one mesh-surfaces file per face into the folder below. The names are not written with it: they are saved with the scene, which is where anything needing them reads them from. Every path in solver.xml is resolved relative to the directory a job runs in, so this is normally the mesh folder of a case.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="ctkPathLineEdit" name="outputDirectoryPathLineEdit">
+        <property name="toolTip">
+         <string>Folder the mesh-complete files are written into, and created if it does not exist.</string>
+        </property>
+        <property name="filters">
+         <set>ctkPathLineEdit::Dirs|ctkPathLineEdit::Writable</set>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="exportButton">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="text">
+         <string>Export mesh-complete</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="statusLabel">
+     <property name="text">
+      <string/>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>ctkCollapsibleButton</class>
+   <extends>QWidget</extends>
+   <header>ctkCollapsibleButton.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>ctkPathLineEdit</class>
+   <extends>QWidget</extends>
+   <header>ctkPathLineEdit.h</header>
+  </customwidget>
+  <customwidget>
+   <class>qMRMLNodeComboBox</class>
+   <extends>QWidget</extends>
+   <header>qMRMLNodeComboBox.h</header>
+  </customwidget>
+  <customwidget>
+   <class>qMRMLWidget</class>
+   <extends>QWidget</extends>
+   <header>qMRMLWidget.h</header>
+   <container>1</container>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections>
+  <connection>
+   <sender>SimVascularMeshPrep</sender>
+   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+   <receiver>inputMeshSelector</receiver>
+   <slot>setMRMLScene(vtkMRMLScene*)</slot>
+  </connection>
+ </connections>
+</ui>
