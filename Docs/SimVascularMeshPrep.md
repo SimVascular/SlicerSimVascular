@@ -42,7 +42,9 @@ the *input surface* already carried, which for a surface out of Clip Vessel can 
 
 **Faces** — a row per face, with its cell count, area, the diameter of the circle of the
 same area, and its flatness. Selecting a row shows that face on its own in the 3D view.
-The `Name` column is the one to fill in.
+The `Name` column is the one to fill in — where it is not already filled in for you: a mesh
+that came through Clip Vessel arrives with the names from its clip points, shown dimmed and
+italic (see *Names inherited from the clip*).
 
 It works the other way round as well: **moving the cursor over the mesh in a 3D view shows
 whichever face is under it**, and **clicking selects that face's row**, scrolling the table
@@ -56,20 +58,24 @@ found by where the pick landed rather than by the cell id it also reports: that 
 the polydata the display pipeline built to draw the node, which for an unstructured grid
 is not the grid's own cells.
 
-**The names are saved with the scene**, in the module's parameter node, along with the face
-ids array and the output folder. Closing Slicer and opening the scene again brings them
-back with the mesh they belong to, and a remesh in the same scene keeps them: they are
+**The names you type are saved with the scene**, in the module's parameter node, along with
+the face ids array and the output folder. Closing Slicer and opening the scene again brings
+them back with the mesh they belong to, and a remesh in the same scene keeps them: they are
 matched to faces by id, so only the measurements change. That is the whole of how the
 naming persists — there is no file beside the mesh to keep in step with it, and anything
-outside Slicer that needs the names reads them out of the scene.
+outside Slicer that needs the names reads them out of the scene. Inherited names are not
+saved; they are read from the clip points again on every load, so that they cannot disagree
+with the clip they came from.
 
 **Export** — writes the folder. The button stays disabled until every face has a name and
 there is somewhere to write to, because a face without a name has no boundary condition to
 bind to. The folder defaults to `mesh` beside the scene file, which is where a case wants
 it, and to nothing at all for a scene that has never been saved.
 
-The line under the panel says how many faces there are and how many are still to name, and
-follows every name typed.
+The line under the panel says how many faces there are, how many came named from Clip
+Vessel, and how many are still to name, and follows every name typed. Anything that had to
+be done to an inherited name — a duplicate label numbered apart, a clip point that is gone —
+is reported there too.
 
 ## Naming the faces
 
@@ -88,6 +94,56 @@ or `wall_*` for vessel wall, which is what gets merged into `walls_combined.vtp`
 **Flatness is the check on a cap.** It is the largest distance of any point of the face
 from its own best-fit plane, so a cap cut normal to the vessel reads 0. One that does not
 was not cut cleanly, and the flow crossing it is not what its boundary condition says.
+
+## Names inherited from the clip
+
+Most faces should arrive named. The vessel names already exist upstream — they are the
+labels on the clip points in [Clip Vessel](https://github.com/vmtk/SlicerExtension-VMTK) —
+and a name typed here is the same name typed a second time. So Clip Vessel records on its
+output which of its clip points named each face, CFD Mesh Generator carries that record onto
+the volume mesh, and this panel follows it: a Fontan case with twenty-six faces opens named
+rather than empty.
+
+What travels is three things on the mesh node: a `ClipPoints` node reference to the markups
+node, and the attributes `ClipVessel.FaceIdToClipPointID` and `ClipVessel.WallFaceID`. Only
+the pointer, never a copy of the labels. That is the whole design: with no second copy there
+is nothing to go stale, so renaming a clip point renames the face, live.
+
+A control point label is free text and a face name is a file name, so the labels are put
+through the same sanitizer the headless scripts use — `Outlet 1` becomes `cap_Outlet_1` —
+and a case packaged from the panel and one packaged from a terminal name their files
+identically. Two ends carrying the same label upstream, which Clip Vessel's positional
+defaults make easy, are numbered apart (`cap_Outlet_1_3`, `cap_Outlet_1_7`) and reported in
+the status line rather than refused: refusing would block an export on names nobody typed,
+with nothing to fix in this panel.
+
+### Overrides
+
+**What you type is an override, not the name.** The panel resolves each face as *override,
+or else inherited*, which buys three behaviours from one rule:
+
+- rename a clip point upstream and the face name follows;
+- type a name and it sticks, whatever happens upstream afterwards;
+- clear the cell and the inherited name comes back, rather than the face going blank.
+
+Only the overrides are saved with the scene. The inherited names are worked out again on
+every load, from the clip points as they stand then.
+
+**Inherited names are drawn dimmed and italic**, with a tooltip naming the clip point they
+came from. This matters more than it sounds. The risk of a name you did not choose is that
+it looks exactly like one you did: `cap_Outlet_1`, read off Clip Vessel's positional
+default, is indistinguishable from a considered name, and a boundary condition bound to it
+is bound to whichever vessel happened to be fourteenth. Seeing which of twenty-six names
+nobody has checked is what the panel is for.
+
+A face whose clip point has been deleted comes out **unnamed**, not renamed. This is why the
+record is keyed by control point ID rather than by position in the list: a cap's face id is
+`firstCapFaceId + clip point index`, so deleting a clip point shifts every later index down
+one, and keyed by index each of those vessels' names would move quietly onto the face of the
+vessel before it. Unnamed is a thing an operator can see; a plausible wrong name is not.
+
+Nothing here is required. A mesh imported from elsewhere carries none of the record, and
+then every name is typed in this panel, exactly as before.
 
 ## What it refuses
 
@@ -163,3 +219,9 @@ All of it is in `svmeshcomplete`, the package beside this module, which imports 
 from Slicer and is pip-installable on its own. This file is an MRML adapter: it reads the
 selected mesh node's grid, calls the package, and reports what it wrote. A workflow
 packaging cases from a terminal calls the same functions and gets the same folder.
+
+That includes the naming rule. `face_table.names_from_labels` takes `{face_id: label}` and
+returns the names, sanitized and with duplicates numbered apart, so a script that has labels
+from anywhere — a clip points `.mrk.json`, a spreadsheet — reaches the same file names the
+panel would. Only *following Clip Vessel's record* is the module's own, because that means
+reading a node reference, which is MRML.

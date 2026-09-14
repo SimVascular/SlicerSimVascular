@@ -31,10 +31,15 @@ Slicer's Python and outside it, and its tests need neither.
 from svmeshcomplete import testing
 from svmeshcomplete.face_table import (
     CAP_PREFIX,
+    WALL_NAME,
     WALL_PREFIX,
+    DerivedNames,
     Face,
     FaceTable,
     FaceTableError,
+    cap_name,
+    names_from_labels,
+    sanitized,
 )
 from svmeshcomplete.faces import (
     FACE_ID_ARRAY_NAMES,
@@ -58,6 +63,7 @@ from svmeshcomplete.mesh_complete import (
 __all__ = [
     "testing",
     "CAP_PREFIX",
+    "DerivedNames",
     "EXTERIOR_SURFACE_NAME",
     "FACE_ID_ARRAY_NAMES",
     "Face",
@@ -70,11 +76,15 @@ __all__ = [
     "MeshCompleteResult",
     "VOLUME_MESH_NAME",
     "WALLS_COMBINED_NAME",
+    "WALL_NAME",
     "WALL_PREFIX",
     "boundary_of",
+    "cap_name",
     "find_face_id_array",
     "measure_faces",
+    "names_from_labels",
     "read_dataset",
+    "sanitized",
     "write_dataset",
     "write_mesh_complete",
 ]
