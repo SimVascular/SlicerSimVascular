@@ -48,6 +48,7 @@ from svmeshcomplete.faces import (
     boundary_of,
     find_face_id_array,
     measure_faces,
+    misplaced_faces,
 )
 from svmeshcomplete.io import read_dataset, write_dataset
 from svmeshcomplete.mesh_complete import (
@@ -82,6 +83,7 @@ __all__ = [
     "cap_name",
     "find_face_id_array",
     "measure_faces",
+    "misplaced_faces",
     "names_from_labels",
     "read_dataset",
     "sanitized",

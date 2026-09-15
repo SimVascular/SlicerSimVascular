@@ -136,6 +136,26 @@ default, is indistinguishable from a considered name, and a boundary condition b
 is bound to whichever vessel happened to be fourteenth. Seeing which of twenty-six names
 nobody has checked is what the panel is for.
 
+### When an inherited name is on the wrong vessel
+
+An inherited name is only as good as the record it came from, and a wrong record is the one fault
+nothing else in the chain can see: the face ids are all on the mesh, each names a real clip point,
+every name is unique and plausible. It has happened — CFD Mesh Generator's boundary layer once
+rotated the cap ids, and on a clinical case 22 of 23 caps were named after another vessel with
+nothing anywhere saying so.
+
+So the panel asks the question ids cannot answer: **is this cap where its clip point is?** Each
+face's centroid is matched to the clip point positions, one to one so that two faces cannot both
+be attributed to the same end and hide a swap between them. A face that comes out somewhere other
+than where the record puts it is **drawn in red**, says so when hovered, and is counted in the
+status line. Typing a name over it clears the complaint — an override is your own answer, and the
+record no longer applies to that face.
+
+It is advisory, not a refusal. A flow extension puts a cap at the tip of the extension rather than
+at its clip point, which on a short branch in a crowded tree can read as a disagreement when
+nothing is wrong. The tooltip says so. Being wrong the other way costs a boundary condition on
+the wrong vessel, which is worth a false alarm or two.
+
 A face whose clip point has been deleted comes out **unnamed**, not renamed. This is why the
 record is keyed by control point ID rather than by position in the list: a cap's face id is
 `firstCapFaceId + clip point index`, so deleting a clip point shifts every later index down
