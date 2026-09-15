@@ -102,6 +102,11 @@ WALL_FACE_ID_ATTRIBUTE = "ClipVessel.WallFaceID"
 # noticing that is what this panel is for.
 INHERITED_NAME_COLOR = qt.QColor(128, 128, 128)
 
+# What a name the geometry disagrees with is drawn in. Louder than the grey of an ordinary
+# inherited name, because this one is not merely unchecked - it is probably wrong, and wrong in
+# the way nothing downstream can catch.
+MISPLACED_NAME_COLOR = qt.QColor(200, 60, 40)
+
 # The highlight's own node, kept out of the way of anything the operator has, and the
 # colour it is drawn in: yellow against the grey the mesh sits at.
 HIGHLIGHT_NODE_NAME = "Mesh Prep face highlight"
@@ -159,6 +164,7 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         self._overrides = {}
         self._inherited = {}
         self._inheritedNotes = ()
+        self._misplaced = {}
         self._wallFaceId = None
         self._clipPointsNode = None
         self._updating = False
@@ -538,6 +544,7 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
             self._clipPointsNode = None
         self._inherited = {}
         self._inheritedNotes = ()
+        self._misplaced = {}
         self._wallFaceId = None
 
     def readInheritedNames(self, node):
@@ -555,6 +562,7 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         derived = self.logic.inheritedNames(node)
         self._inherited = dict(derived.names)
         self._inheritedNotes = derived.notes
+        self._misplaced = self.logic.misplacedFaces(node, self._measured)
         self._wallFaceId = self.logic.wallFaceId(node)
         self._clipPointsNode = self.logic.clipPointsNode(node)
         if self._clipPointsNode is not None:
@@ -576,6 +584,8 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         derived = self.logic.inheritedNames(node)
         self._inherited = dict(derived.names)
         self._inheritedNotes = derived.notes
+        # Moving a clip point moves the end the record points at, so the check has to run again.
+        self._misplaced = self.logic.misplacedFaces(node, self._measured)
         self.populateTable()
         self.updateStatus()
 
@@ -691,6 +701,20 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
             return
         label = labels.get(faceId) or ""
         source = clipPointsNode.GetName() if clipPointsNode is not None else ""
+        if faceId in self._misplaced:
+            # The name is on the wrong vessel. Said in the table, in red, rather than merely
+            # logged: a plausible wrong name is the one fault nothing downstream can catch, and
+            # the person about to bind a boundary condition to it is looking at this row.
+            item.setForeground(qt.QBrush(MISPLACED_NAME_COLOR))
+            item.setToolTip(
+                _("This name may be on the wrong vessel. The record says face {face} is the clip "
+                  "point “{label}”, but this face sits where face {other} is supposed to "
+                  "be. Check it against the anatomy and type the right name over it. (Flow "
+                  "extensions move a cap away from its clip point and can read this way without "
+                  "anything being wrong.)").format(
+                    face=faceId, label=label, other=self._misplaced[faceId])
+            )
+            return
         item.setToolTip(
             _("From the clip point “{label}” in “{node}”, not typed here. "
               "Type over it to override; clear the cell to take this name back.").format(
@@ -841,8 +865,15 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         Not folded into updateButtons: that also runs when the output folder changes, and
         it would wipe out what an export had just reported.
         """
+        notes = list(self._inheritedNotes)
+        if self._misplaced:
+            notes.append(_("{count} inherited name(s) may be on the wrong vessel: face(s) "
+                           "{faces}. Hover a name to see what disagrees.").format(
+                count=len(self._misplaced),
+                faces=", ".join(str(faceId) for faceId in sorted(self._misplaced))))
         self.setStatus(self.logic.statusText(
-            self._measured, self._overrides, self._inherited, self._inheritedNotes))
+            self._measured, self._overrides, self._inherited, notes),
+            warning=bool(self._misplaced))
 
     def setStatus(self, text, warning=False):
         self.ui.statusLabel.text = text
@@ -946,6 +977,58 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
         """
         return face_table.names_from_labels(cls.inheritedLabels(meshNode),
                                             wall_face_id=cls.wallFaceId(meshNode))
+
+    @classmethod
+    def expectedFacePositions(cls, meshNode):
+        """Where the record says each named face should be: {faceId: clip point position}.
+
+        A face id names a control point, and that control point marks the vessel end the face's
+        cap closes - so the record carries a position as well as a name, whether or not anyone
+        reads it that way.
+        """
+        markups = cls.clipPointsNode(meshNode)
+        if markups is None:
+            return {}
+        positions = {}
+        for faceId in cls.inheritedLabels(meshNode):
+            controlPointId = None
+            recorded = meshNode.GetAttribute(FACE_ID_TO_CLIP_POINT_ID_ATTRIBUTE)
+            try:
+                controlPointId = json.loads(recorded).get(str(faceId))
+            except (ValueError, AttributeError):
+                return {}
+            index = markups.GetNthControlPointIndexByID(str(controlPointId))
+            if index < 0:
+                # The clip point is gone, so the face is already coming out unnamed. Nothing to
+                # hold it against.
+                continue
+            position = [0.0, 0.0, 0.0]
+            markups.GetNthControlPointPositionWorld(index, position)
+            positions[faceId] = tuple(position)
+        return positions
+
+    @classmethod
+    def misplacedFaces(cls, meshNode, measured):
+        """The faces whose inherited name belongs to a different vessel end.
+
+        The one check on an inherited name that is worth anything. Everything else about the
+        record can be verified without leaving the numbers - the ids are on the mesh, each names a
+        real control point, every name is unique - and all of it stays true if the ids have been
+        permuted, which has happened: a boundary layer once rotated them and every id-based check
+        upstream and down passed throughout. What a permutation cannot survive is being asked
+        where the cap actually is.
+
+        The panel is where this has to be said. A mesher can warn into the application log, but
+        the person about to bind a boundary condition to `cap_RSVC` is looking at this table.
+
+        :return: {faceId: the faceId whose vessel end it actually sits at}, empty when the record
+          and the geometry agree.
+        """
+        expected = cls.expectedFacePositions(meshNode)
+        if not expected:
+            return {}
+        centroids = {face.face_id: face.centroid for face in measured}
+        return faces.misplaced_faces(centroids, expected)
 
     @classmethod
     def looksUnplanar(cls, face, isWall):
@@ -1203,6 +1286,8 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         self.test_overridesBeatInheritedNamesAndSurviveAScene()
         self.setUp()
         self.test_thePanelInheritsFollowsAndOverrides()
+        self.setUp()
+        self.test_thePanelSaysWhenAnInheritedNameIsOnTheWrongVessel()
 
     # -- inherited names ---------------------------------------------------
     def recordedMesh(self, labels, faceIdsByIndex=(2, 3), wallFaceId=1):
@@ -1386,6 +1471,66 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         self.assertEqual(widget._clipPointsNode, clipPoints)
 
         self.delayDisplay("The panel inherits, follows a rename, and takes an override")
+
+    def test_thePanelSaysWhenAnInheritedNameIsOnTheWrongVessel(self):
+        """A record that names the right faces after the wrong ends is caught here, or nowhere.
+
+        This is the fault the whole chain is least able to see. Every other check passes: the ids
+        are on the mesh, each names a real control point, the names are unique and plausible. It
+        happened for real - CFD Mesh Generator's boundary layer rotated the cap ids, and 22 of 23
+        caps on a clinical case were named after another vessel with nothing anywhere saying so.
+
+        So the check is held to two things: it stays quiet when the record and the geometry agree,
+        and it speaks up in the table and the status line when they do not.
+        """
+        import tempfile
+
+        widget = slicer.util.getModuleWidget("SimVascularMeshPrep")
+        mesh, clipPoints = self.recordedMesh(("Inlet", "Outlet 1"))
+        widget.ui.faceIdArrayLineEdit.text = "CellEntityIds, ModelFaceID"
+        widget.ui.outputDirectoryPathLineEdit.currentPath = tempfile.mkdtemp()
+
+        # Put each clip point where its own cap actually is, so the record is true to begin with.
+        logic = SimVascularMeshPrepLogic()
+        measured = {face.face_id: face for face in
+                    logic.measure(mesh.GetMesh(), "CellEntityIds, ModelFaceID")}
+        self.assertIn(2, measured)
+        self.assertIn(3, measured)
+        for index, faceId in enumerate((2, 3)):
+            clipPoints.SetNthControlPointPositionWorld(index, list(measured[faceId].centroid))
+
+        widget.ui.inputMeshSelector.setCurrentNode(mesh)
+        self.assertEqual(widget._misplaced, {}, "a true record should draw no complaint")
+        self.assertNotIn("wrong vessel", widget.ui.statusLabel.text)
+
+        # Now swap the two entries of the record. Still two valid face ids, each still naming a
+        # real clip point; only the geometry disagrees.
+        controlPointIds = [clipPoints.GetNthControlPointID(index) for index in range(2)]
+        mesh.SetAttribute(FACE_ID_TO_CLIP_POINT_ID_ATTRIBUTE,
+                          json.dumps({"2": controlPointIds[1], "3": controlPointIds[0]}))
+        widget.onMeshChanged()
+
+        self.assertEqual(widget._misplaced, {2: 3, 3: 2},
+                         "each face should be reported as sitting at the other's end")
+        self.assertIn("wrong vessel", widget.ui.statusLabel.text)
+
+        table = widget.ui.facesTable
+        rows = {int(table.item(row, 0).text()): row for row in range(table.rowCount)}
+        for faceId in (2, 3):
+            item = table.item(rows[faceId], NAME_COLUMN)
+            self.assertIn("wrong vessel", item.toolTip(),
+                          "face %d should say so when hovered" % faceId)
+            self.assertEqual(item.foreground().color().red(), MISPLACED_NAME_COLOR.red(),
+                             "face %d should be drawn as suspect" % faceId)
+
+        # Typing a name over it is the way out, and takes the complaint with it: an override is
+        # the operator's own answer, and the record no longer applies to that face.
+        table.item(rows[2], NAME_COLUMN).setText("cap_checked_by_hand")
+        widget.onNameEdited(rows[2], NAME_COLUMN)
+        self.assertEqual(widget._overrides, {2: "cap_checked_by_hand"})
+        self.assertFalse(widget.isInherited(2))
+
+        self.delayDisplay("A record that disagrees with the geometry is reported")
 
     def test_measureNamesAndExports(self):
         import tempfile

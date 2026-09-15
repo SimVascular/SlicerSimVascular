@@ -46,16 +46,38 @@ Neither suite is wired into CTest yet: the `Testing/CMakeLists.txt` files only r
 commented out. Run them directly, as above.
 
 `PythonSlicer` (in `Slicer.app/Contents/bin` on macOS) is **not** usable non-interactively — its
-launcher swallows `-c` and script arguments and prints its own help instead. So there is no way
-to test the MRML half of a change from a script; see the next section.
+launcher swallows `-c` and script arguments and prints its own help instead. The application
+binary is another matter; see the next section.
 
 ## Testing anything that touches MRML
 
 Panel behaviour, node references, node attributes, scene `.mrb` round-trips — none of it is
-reachable from the headless suites, and there is no scripted substitute. It needs a running
-Slicer with the extension loaded, driven by hand or over MCP (below).
+reachable from the headless suites, but all of it is scriptable. The application binary takes
+`--python-script`, which is how `slicer_add_python_test` runs the suites, so a repo test file
+runs unchanged:
 
-Write it so as much as possible falls on the package side, where it can be tested.
+```sh
+/Applications/Slicer.app/Contents/MacOS/Slicer --no-splash --no-main-window --testing \
+  --additional-module-paths SimVascularMeshPrep \
+  --python-script SimVascularMeshPrep/Testing/Python/some_test.py
+```
+
+- **Drop `--no-main-window` for widget tests**, and for anything that could disturb the layout
+  manager: `vtkMRMLScene.Clear(1)` removes the layout node and segfaults a windowed Slicer, which
+  is invisible headless. Use `Clear()` and remove the parameter node by hand instead.
+- **Drop `--disable-cli-modules`** for anything that preprocesses a surface, which decimates
+  through the `decimation` CLI module.
+- `--testing` uses a throwaway settings file, so no module is registered from the user's
+  configured paths — pass `--additional-module-paths` for anything that needs
+  `slicer.util.getModuleWidget`.
+- `slicer.util.getModuleWidget` returns **the same widget every time**. State a test leaves on it
+  outlives `mrmlScene.Clear()`, so reset what you rely on in `setUp`.
+
+Prefer this to driving a live Slicer over MCP for anything repeatable: a clean scene every run,
+and a crash costs nothing. Running a whole suite through MCP `execute_python` has segfaulted
+Slicer and taken the server with it. Keep MCP for looking at a session, not for running tests.
+
+Write it so as much as possible falls on the package side anyway, where it needs no Slicer at all.
 
 ## Writing style
 
@@ -90,8 +112,29 @@ their face id conventions are this repo's input contract:
 - Face ids arrive under `CellEntityIds` (VMTK), `ModelFaceID` (SimVascular) or `MaterialIds`
   (Slicer), depending on what the input surface carried. `Docs/SimVascularMeshPrep.md`
   explains which and why.
+- **The face *names* travel too, as a pointer.** Clip Vessel puts a `ClipPoints` node reference
+  and the attributes `ClipVessel.FaceIdToClipPointID` / `ClipVessel.WallFaceID` on its output, and
+  CFD Mesh Generator copies them onto the volume mesh. The names themselves are control point
+  labels on the markups node, never copied, so renaming a clip point renames the face. The map is
+  keyed by control point **ID**, not index: a cap's face id is `firstCapFaceId + clip point
+  index`, so keying by index would move names onto neighbouring faces when a clip point is
+  deleted. `Docs/SimVascularMeshPrep.md` has the whole chain.
 
 Changing anything here that reads face ids means checking those conventions upstream first.
+
+Two things that cost real time when working against a VMTK working tree:
+
+- **Slicer loads `CfdMeshGeneratorLib` from the *installed* SlicerVMTK extension** even when
+  `CfdMeshGenerator.py` resolves to a working tree, because the installed `qt-scripted-modules`
+  sits first on `sys.path` — and neither `PYTHONPATH` nor `--additional-module-paths` beats it. So
+  a session can run worktree module code over installed library code and look fine. Check with
+  `from CfdMeshGeneratorLib import MeshingPipeline; print(MeshingPipeline.__file__)`; fix it by
+  inserting the worktree at `sys.path[0]`, purging those names from `sys.modules`, and calling
+  `slicer.util.reloadScriptedModule`.
+- **Ask geometrically, not by id.** A face id being present proves nothing about which vessel it
+  is on: a permutation of the cap ids is the same set, all in range, and looks right in the views.
+  A boundary layer permuted them for a while and every id-based test passed throughout. Check a
+  cap against where its clip point is.
 
 ## Optional local tooling
 

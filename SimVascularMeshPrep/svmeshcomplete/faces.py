@@ -73,6 +73,50 @@ def boundary_of(dataset):
     return cells.as_polydata(cells.extract(dataset, two_dimensional))
 
 
+def misplaced_faces(face_centroids, expected_positions) -> dict:
+    """Faces that are not where they are supposed to be, and where they are instead.
+
+    The check on an inherited name. A face id is a number and an upstream record says which
+    vessel end it belongs to; that end has a position, so the claim can be tested rather than
+    taken. Nothing else can test it: a permutation of the ids is the same set of ids, all present
+    and all in range, and it reads as correct everywhere except in space.
+
+    Matched one to one, closest pair first, so that two faces cannot both be attributed to the
+    same end and hide a swap between them. Faces with no expected position, and expected
+    positions with no face, are left out - they are somebody else's problem to report.
+
+    :param face_centroids: {face_id: (x, y, z)}, where each face actually is.
+    :param expected_positions: {face_id: (x, y, z)}, where the record says each face should be.
+    :return: {face_id: the face id whose expected position it is nearest}, for the faces where
+      those differ. Empty when everything is where it should be.
+    """
+    import numpy as np
+
+    faces = sorted(set(face_centroids) & set(expected_positions))
+    if len(faces) < 2:
+        # With one face there is no other end it could have been confused with.
+        return {}
+    centroids = np.array([face_centroids[face_id] for face_id in faces], dtype=float)
+    targets = np.array([expected_positions[face_id] for face_id in faces], dtype=float)
+    distances = np.linalg.norm(centroids[:, None, :] - targets[None, :, :], axis=-1)
+
+    assigned = {}
+    taken_rows, taken_columns = set(), set()
+    for _pair in range(len(faces)):
+        candidates = distances.copy()
+        for row in taken_rows:
+            candidates[row, :] = np.inf
+        for column in taken_columns:
+            candidates[:, column] = np.inf
+        row, column = np.unravel_index(np.argmin(candidates), candidates.shape)
+        if not np.isfinite(candidates[row, column]):
+            break
+        assigned[faces[row]] = faces[column]
+        taken_rows.add(row)
+        taken_columns.add(column)
+    return {face_id: sits_at for face_id, sits_at in assigned.items() if face_id != sits_at}
+
+
 def measure_faces(dataset, face_id_array_name: str | None = None) -> list[FaceGeometry]:
     """Measure every labeled face of a volume mesh or a surface."""
     surface = boundary_of(dataset)
