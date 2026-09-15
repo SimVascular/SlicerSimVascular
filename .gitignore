@@ -62,3 +62,9 @@ target/
 
 # Local MCP server config (absolute paths to this machine)
 .mcp.json
+
+# Working notes for the automatic face naming work, kept beside the code and not in it: they
+# describe decisions in progress, name branches and commits that are still local, and go stale
+# the moment either changes. The file says so at the top. Listed here because `git add -A`
+# swept it into a commit once already.
+AUTO_FACE_NAMING_PLAN.md
