@@ -126,8 +126,13 @@ or else inherited*, which buys three behaviours from one rule:
 - type a name and it sticks, whatever happens upstream afterwards;
 - clear the cell and the inherited name comes back, rather than the face going blank.
 
-Only the overrides are saved with the scene. The inherited names are worked out again on
-every load, from the clip points as they stand then.
+**Every name is saved with the scene**, typed here or inherited, because the scene is where
+everything else reads them from — Export names its files from them, and the workflow scripts
+that package a case from a terminal read them off the saved scene without opening Slicer. The
+scene also records which of them were inherited, and those are worked out again from the clip
+points on every load, so the saved copy never freezes a name against a rename upstream. Where
+the clip is no longer in the scene to ask, the saved copy is what answers, and the name is
+still shown as one nobody checked.
 
 **Inherited names are drawn dimmed and italic**, with a tooltip naming the clip point they
 came from. This matters more than it sounds. The risk of a name you did not choose is that
