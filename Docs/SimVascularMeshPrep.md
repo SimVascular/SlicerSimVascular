@@ -1,191 +1,162 @@
 # SimVascular Mesh Prep
 
-Turns a face-labelled volume mesh into the `mesh-complete` folder an svMultiPhysics case
-reads, and lets you name the faces on the way. The input is a volume mesh — typically one
-out of [CFD Mesh Generator](CfdMeshGenerator.md), whose face ids this reads — and the
-output is a folder of files the solver binds its boundary conditions through.
+## Summary
 
-## What the solver wants, and why this is a step at all
+Turns a face-labelled volume mesh into the `mesh-complete` folder that the
+[svMultiPhysics](https://github.com/SimVascular/svMultiPhysics) solver reads, and lets you
+name the faces on the way. The input is a volume mesh, typically one out of
+[CFD Mesh Generator](https://github.com/vmtk/SlicerExtension-VMTK/blob/master/Docs/CfdMeshGenerator.md);
+the output is a folder with the volume mesh and one file per named face, which the solver
+binds its boundary conditions through.
 
-A mesher hands back one grid holding the volume elements and the boundary cells they stand
-on, every cell carrying a face id. svMultiPhysics reads a folder:
+If the surface was clipped with
+[Clip Vessel](https://github.com/vmtk/SlicerExtension-VMTK/blob/master/Docs/ClipVessel.md),
+the faces arrive already named after the clip points, so on most cases naming is a matter
+of checking rather than typing.
+
+![](SimVascularMeshPrep01.png)
+
+*A Fontan geometry with its clip points named in Clip Vessel. In SimVascular Mesh Prep the
+selected face is highlighted in the 3D view, and the face names inherited from the clip
+points are listed in the panel.*
+
+## Tutorial
+
+1. **Make a volume mesh.** In CFD Mesh Generator, mesh your capped surface with
+   *Tetrahedralize* enabled (the solver needs a mesh with a single element type).
+2. **Open SimVascular Mesh Prep** and select the volume mesh in **Mesh**. The face ids array
+   is found automatically (`CellEntityIds`, `ModelFaceID` or `MaterialIds`).
+3. **Find the faces.** Move the cursor over the mesh in the 3D view: the face under it is
+   highlighted. Click it to select its row in the **Faces** table. The buttons beside the
+   mesh selector toggle edges, colouring by face id, transparency and visibility, which
+   helps when a cap is hidden inside the anatomy.
+4. **Name the faces.** Type a name in the `Name` column of each row. Use `cap_<vessel>` for
+   every inlet and outlet (each one gets its own boundary condition) and `wall` or
+   `wall_<something>` for the vessel wall. Names become file names and boundary condition
+   names in the solver, so pick ones you will want to read results under.
+   - Names inherited from Clip Vessel appear **dimmed and italic**. Check them; typing over
+     one replaces it, and clearing the cell brings the inherited name back. Renaming a clip
+     point in Clip Vessel renames the face.
+   - A name drawn **in red** is an inherited name whose face does not sit where its clip
+     point is, so it may be on the wrong vessel. Hover over it for details, and type the
+     correct name to resolve it.
+5. **Check the caps.** The table lists each face's area, equivalent diameter and
+   **flatness**, which is the largest distance of any point from the face's best-fit plane.
+   A cleanly cut cap reads close to 0; a large value means it was not cut normal to the
+   vessel.
+6. **Export.** Choose the output folder (by default `mesh` next to the saved scene) and
+   click **Export**. The button is enabled once every face has a name. The status line
+   below the panel reports how many faces are named, inherited or still missing a name.
+
+The names are saved with the scene, so they come back when you reopen it and survive a
+remesh in the same scene.
+
+### What gets written
 
 ```
 mesh/
-  mesh-complete.mesh.vtu        volume elements alone, GlobalNodeID + GlobalElementID
-  mesh-complete.exterior.vtp    every boundary cell, with ModelFaceID
-  walls_combined.vtp            the wall faces merged, for the no-slip condition
+  mesh-complete.mesh.vtu        the volume mesh
+  mesh-complete.exterior.vtp    the whole boundary
+  walls_combined.vtp            all wall faces merged
   mesh-surfaces/cap_RSVC.vtp    one file per named face
+  mesh-surfaces/wall.vtp
+  ...
 ```
 
-`GlobalNodeID` is how a boundary condition is bound to the volume: each face file carries,
-per point, the id of the volume node it is, and the solver looks each one up.
-`GlobalElementID` on a face is the element behind each boundary cell, which is what the
-boundary term is integrated against. No mesher writes any of this, which is why the
-translation is a step of its own.
+### When export is refused
 
-## The panel
+The module refuses to export a mesh the solver would misread without saying so:
 
-**Mesh** — the volume mesh node, and which cell array its face ids are in. Four buttons
-beside the selector, for seeing a cap that sits inside the anatomy: **edges** on or off,
-**colour by face ids** so every face can be told from its neighbours at once (turning that
-off leaves the mesh a slightly see-through neutral grey rather than whatever colour its
-node was created with), **transparency**, and **show or hide**. None of them is checkable — a mark would be saying what
-the display node holds, and nothing tells the panel when that changes elsewhere, so it
-would sooner or later contradict the scene. Each reads the state at the moment it is
-pressed and turns it around. *Face ids
-array* takes several names and uses the first the mesh carries: `CellEntityIds` is VMTK's
-and `ModelFaceID` is SimVascular's. A mesh whose ids went somewhere else needs that name
-here — CFD Mesh Generator writes them under whichever name its own field lists first that
-the *input surface* already carried, which for a surface out of Clip Vessel can be
-`MaterialIds`.
+- **Mixed element types**, for example tetrahedra with boundary-layer prisms. Enable
+  *Tetrahedralize* in CFD Mesh Generator and remesh.
+- **A face table that does not match the mesh**, for example a cap lost or renumbered by
+  the mesher.
+- **A boundary cell with no volume element behind it.**
+- **More than one `ModelRegionID`** (multi-domain meshes are not supported yet).
 
-**Faces** — a row per face, with its cell count, area, the diameter of the circle of the
-same area, and its flatness. Selecting a row shows that face on its own in the 3D view.
-The `Name` column is the one to fill in — where it is not already filled in for you: a mesh
-that came through Clip Vessel arrives with the names from its clip points, shown dimmed and
-italic (see *Names inherited from the clip*).
+## Running a simulation with svMultiPhysics
 
-It works the other way round as well: **moving the cursor over the mesh in a 3D view shows
-whichever face is under it**, and **clicking selects that face's row**, scrolling the table
-to it if it is out of sight. Which is the direction the work actually goes in — a cap is
-something you are looking at before it is a row in a table.
+The exported folder is the input format of
+[svMultiPhysics](https://github.com/SimVascular/svMultiPhysics). Setting up and running a
+simulation from a graphical interface is under active development as part of the port of
+SimVascular to Slicer; for now, the simulation is set up and run from a terminal.
 
-Hovering only shows; it leaves the selection alone, so the highlight goes back to the
-selected row when the cursor leaves the mesh. A click at the end of a camera drag is
-ignored, so rotating the view does not move the selection. The face under the cursor is
-found by where the pick landed rather than by the cell id it also reports: that id indexes
-the polydata the display pipeline built to draw the node, which for an unstructured grid
-is not the grid's own cells.
+1. **Install svMultiPhysics.** Follow the build or Docker instructions in its
+   [README](https://github.com/SimVascular/svMultiPhysics#readme) so that the
+   `svmultiphysics` command is available.
+2. **Start from a test case.** The
+   [test cases](https://github.com/SimVascular/svMultiPhysics/tree/main/tests/cases) are
+   complete, working inputs. For blood flow,
+   [`fluid/pipe_RCR_3d`](https://github.com/SimVascular/svMultiPhysics/tree/main/tests/cases/fluid/pipe_RCR_3d)
+   (flow inlet, RCR outlet, rigid wall) is a good template. Copy its `solver.xml`, and any
+   inflow file it uses, into a new case folder.
+3. **Put the exported mesh next to it**, so the case looks like:
 
-**The names you type are saved with the scene**, in the module's parameter node, along with
-the face ids array and the output folder. Closing Slicer and opening the scene again brings
-them back with the mesh they belong to, and a remesh in the same scene keeps them: they are
-matched to faces by id, so only the measurements change. That is the whole of how the
-naming persists — there is no file beside the mesh to keep in step with it, and anything
-outside Slicer that needs the names reads them out of the scene. Inherited names are not
-saved; they are read from the clip points again on every load, so that they cannot disagree
-with the clip they came from.
+   ```
+   my_case/
+     solver.xml
+     inflow.flow
+     mesh/                  exported by SimVascular Mesh Prep
+   ```
 
-**Export** — writes the folder. The button stays disabled until every face has a name and
-there is somewhere to write to, because a face without a name has no boundary condition to
-bind to. The folder defaults to `mesh` beside the scene file, which is where a case wants
-it, and to nothing at all for a scene that has never been saved.
+4. **Point `solver.xml` at the mesh.** In `<Add_mesh>`, set `Mesh_file_path` to
+   `mesh/mesh-complete.mesh.vtu` and add one `<Add_face>` per file in
+   `mesh/mesh-surfaces/`, using the face names you chose in Slicer:
 
-The line under the panel says how many faces there are, how many came named from Clip
-Vessel, and how many are still to name, and follows every name typed. Anything that had to
-be done to an inherited name — a duplicate label numbered apart, a clip point that is gone —
-is reported there too.
+   ```xml
+   <Add_mesh name="msh">
+     <Mesh_file_path> mesh/mesh-complete.mesh.vtu </Mesh_file_path>
+     <Add_face name="cap_IVC">
+       <Face_file_path> mesh/mesh-surfaces/cap_IVC.vtp </Face_file_path>
+     </Add_face>
+     <Add_face name="wall">
+       <Face_file_path> mesh/mesh-surfaces/wall.vtp </Face_file_path>
+     </Add_face>
+     <!-- ... one per face ... -->
+   </Add_mesh>
+   ```
 
-## Naming the faces
+5. **Add a boundary condition for every face.** In `<Add_equation type="fluid">`, add one
+   `<Add_BC name="...">` per face, with the same name as its `<Add_face>`: for example an
+   unsteady flow (`Dir`) on the inlet, a resistance or `RCR` (`Neu`) on each outlet, and a
+   zero velocity (`Dir`, `Steady`, value `0.0`) on the wall. Copy the blocks from the
+   template and change the names and values. Then set the fluid properties, time step and
+   number of steps for your case. The
+   [svMultiPhysics documentation](https://simvascular.github.io/documentation/multi_physics.html)
+   describes every parameter.
+6. **Run it** from the case folder:
 
-A face id is a number; a boundary condition is per vessel. The panel lists every face of
-the mesh with its area, the diameter of the circle of the same area, its centroid and its
-flatness, highlights the selected one in the 3D view, and takes a name for it.
+   ```sh
+   mpiexec -np 4 svmultiphysics solver.xml
+   ```
 
-The names matter beyond this module: they become the `mesh-surfaces/` file names, and
-through those the `Add_face` and `Add_BC` names in `solver.xml` — so they are what every
-result comes back labelled with. `cap_RSVC` is a name to read a pressure under;
-`cap_14` is not.
+   The results are written to a `4-procs/` folder (one per number of processes).
+7. **Look at the results.** Load the `result_*.vtu` files into Slicer (drag and drop) to
+   view velocity, pressure and wall shear stress on the mesh. The boundary integrals, such
+   as `B_NS_Pressure_average.txt` and `B_NS_Velocity_flux.txt`, report pressure and flow
+   for each face, under the names you gave it.
 
-Convention: `cap_*` for a face the flow crosses, one boundary condition each, and `wall`
-or `wall_*` for vessel wall, which is what gets merged into `walls_combined.vtp`.
+## Developers
 
-**Flatness is the check on a cap.** It is the largest distance of any point of the face
-from its own best-fit plane, so a cap cut normal to the vessel reads 0. One that does not
-was not cut cleanly, and the flow crossing it is not what its boundary condition says.
+### Why the mesh-complete format
 
-## Names inherited from the clip
+A mesher hands back one grid holding the volume elements and the boundary cells they stand
+on, every cell carrying a face id. svMultiPhysics reads a folder instead, and binds its
+boundary conditions through two id arrays:
 
-Most faces should arrive named. The vessel names already exist upstream — they are the
-labels on the clip points in [Clip Vessel](https://github.com/vmtk/SlicerExtension-VMTK) —
-and a name typed here is the same name typed a second time. So Clip Vessel records on its
-output which of its clip points named each face, CFD Mesh Generator carries that record onto
-the volume mesh, and this panel follows it: a Fontan case with twenty-six faces opens named
-rather than empty.
+- `GlobalNodeID` is how a boundary condition is bound to the volume: each face file
+  carries, per point, the id of the volume node it is, and the solver looks each one up.
+- `GlobalElementID` on a face is the element behind each boundary cell, which is what the
+  boundary term is integrated against.
 
-What travels is three things on the mesh node: a `ClipPoints` node reference to the markups
-node, and the attributes `ClipVessel.FaceIdToClipPointID` and `ClipVessel.WallFaceID`. Only
-the pointer, never a copy of the labels. That is the whole design: with no second copy there
-is nothing to go stale, so renaming a clip point renames the face, live.
+No mesher writes any of this, which is why the translation is a step of its own. The same
+reasoning explains the refusals above: a mixed-type mesh is read wrong because
+svMultiPhysics decides a mesh's element type by counting cell types and taking the last
+kind it found, so tetrahedra with boundary-layer prisms among them are read as all prisms,
+six nodes to an element. A boundary cell standing against no volume element leaves the
+solver nothing to integrate the boundary term against.
 
-A control point label is free text and a face name is a file name, so the labels are put
-through the same sanitizer the headless scripts use — `Outlet 1` becomes `cap_Outlet_1` —
-and a case packaged from the panel and one packaged from a terminal name their files
-identically. Two ends carrying the same label upstream, which Clip Vessel's positional
-defaults make easy, are numbered apart (`cap_Outlet_1_3`, `cap_Outlet_1_7`) and reported in
-the status line rather than refused: refusing would block an export on names nobody typed,
-with nothing to fix in this panel.
-
-### Overrides
-
-**What you type is an override, not the name.** The panel resolves each face as *override,
-or else inherited*, which buys three behaviours from one rule:
-
-- rename a clip point upstream and the face name follows;
-- type a name and it sticks, whatever happens upstream afterwards;
-- clear the cell and the inherited name comes back, rather than the face going blank.
-
-**Every name is saved with the scene**, typed here or inherited, because the scene is where
-everything else reads them from — Export names its files from them, and the workflow scripts
-that package a case from a terminal read them off the saved scene without opening Slicer. The
-scene also records which of them were inherited, and those are worked out again from the clip
-points on every load, so the saved copy never freezes a name against a rename upstream. Where
-the clip is no longer in the scene to ask, the saved copy is what answers, and the name is
-still shown as one nobody checked.
-
-**Inherited names are drawn dimmed and italic**, with a tooltip naming the clip point they
-came from. This matters more than it sounds. The risk of a name you did not choose is that
-it looks exactly like one you did: `cap_Outlet_1`, read off Clip Vessel's positional
-default, is indistinguishable from a considered name, and a boundary condition bound to it
-is bound to whichever vessel happened to be fourteenth. Seeing which of twenty-six names
-nobody has checked is what the panel is for.
-
-### When an inherited name is on the wrong vessel
-
-An inherited name is only as good as the record it came from, and a wrong record is the one fault
-nothing else in the chain can see: the face ids are all on the mesh, each names a real clip point,
-every name is unique and plausible. It has happened — CFD Mesh Generator's boundary layer once
-rotated the cap ids, and on a clinical case 22 of 23 caps were named after another vessel with
-nothing anywhere saying so.
-
-So the panel asks the question ids cannot answer: **is this cap where its clip point is?** Each
-face's centroid is matched to the clip point positions, one to one so that two faces cannot both
-be attributed to the same end and hide a swap between them. A face that comes out somewhere other
-than where the record puts it is **drawn in red**, says so when hovered, and is counted in the
-status line. Typing a name over it clears the complaint — an override is your own answer, and the
-record no longer applies to that face.
-
-It is advisory, not a refusal. A flow extension puts a cap at the tip of the extension rather than
-at its clip point, which on a short branch in a crowded tree can read as a disagreement when
-nothing is wrong. The tooltip says so. Being wrong the other way costs a boundary condition on
-the wrong vessel, which is worth a false alarm or two.
-
-A face whose clip point has been deleted comes out **unnamed**, not renamed. This is why the
-record is keyed by control point ID rather than by position in the list: a cap's face id is
-`firstCapFaceId + clip point index`, so deleting a clip point shifts every later index down
-one, and keyed by index each of those vessels' names would move quietly onto the face of the
-vessel before it. Unnamed is a thing an operator can see; a plausible wrong name is not.
-
-Nothing here is required. A mesh imported from elsewhere carries none of the record, and
-then every name is typed in this panel, exactly as before.
-
-## What it refuses
-
-Three things, because all three otherwise reach the solver and are misread in silence
-rather than reported:
-
-- **A volume mesh of more than one element type.** svMultiPhysics decides a mesh's element
-  type by counting cell types and taking the last kind it found, so tetrahedra with
-  boundary-layer prisms among them are read as all prisms, six nodes to an element. In CFD
-  Mesh Generator, *Tetrahedralize* is what prevents this.
-- **A face table that does not describe the mesh.** A cap the mesher lost is a hole in the
-  domain; a cap renumbered since the table was written is a boundary condition on the
-  wrong vessel.
-- **A boundary cell standing against no volume element**, which the solver has nothing to
-  integrate the boundary term against.
-
-## Against SimVascular's own writer
+### Against SimVascular's own writer
 
 The format is SimVascular's, so `svmeshcomplete` follows
 [`sv4gui_MeshLegacyIO.cxx`](https://github.com/SimVascular/SimVascular/blob/master/Code/Source/sv4gui/Modules/Mesh/Common/sv4gui_MeshLegacyIO.cxx)'s
@@ -217,7 +188,7 @@ Two deliberate differences:
   `<dir>_domain-<i>` folders. This refuses instead, rather than flattening the regions
   into one without saying so. A mesh carrying a single region keeps its id.
 
-## Face ids array
+### Face ids array
 
 Which cell array the face ids are read from, by the same rule CFD Mesh Generator uses: the
 first of the names offered that the mesh carries. `CellEntityIds` is VMTK's name,
@@ -238,12 +209,101 @@ faces.
 Whichever array the input used, the exported files carry `ModelFaceID`, so the choice does
 not reach anything downstream.
 
-## Outside Slicer
+### Names inherited from the clip
 
-All of it is in `svmeshcomplete`, the package beside this module, which imports nothing
-from Slicer and is pip-installable on its own. This file is an MRML adapter: it reads the
-selected mesh node's grid, calls the package, and reports what it wrote. A workflow
-packaging cases from a terminal calls the same functions and gets the same folder.
+The vessel names already exist upstream — they are the labels on the clip points in Clip
+Vessel — and a name typed here is the same name typed a second time. So Clip Vessel records
+on its output which of its clip points named each face, CFD Mesh Generator carries that
+record onto the volume mesh, and this panel follows it.
+
+What travels is three things on the mesh node: a `ClipPoints` node reference to the markups
+node, and the attributes `ClipVessel.FaceIdToClipPointID` and `ClipVessel.WallFaceID`. Only
+the pointer, never a copy of the labels. With no second copy there is nothing to go stale,
+so renaming a clip point renames the face, live.
+
+A control point label is free text and a face name is a file name, so the labels are put
+through the same sanitizer the headless scripts use — `Outlet 1` becomes `cap_Outlet_1` —
+and a case packaged from the panel and one packaged from a terminal name their files
+identically. Two ends carrying the same label upstream, which Clip Vessel's positional
+defaults make easy, are numbered apart (`cap_Outlet_1_3`, `cap_Outlet_1_7`) and reported in
+the status line rather than refused: refusing would block an export on names nobody typed,
+with nothing to fix in this panel.
+
+**What you type is an override, not the name.** The panel resolves each face as *override,
+or else inherited*, which buys three behaviours from one rule: rename a clip point upstream
+and the face name follows; type a name and it sticks, whatever happens upstream afterwards;
+clear the cell and the inherited name comes back, rather than the face going blank.
+
+Inherited names are drawn dimmed because the risk of a name you did not choose is that it
+looks exactly like one you did: `cap_Outlet_1`, read off Clip Vessel's positional default,
+is indistinguishable from a considered name, and a boundary condition bound to it is bound
+to whichever vessel happened to be fourteenth.
+
+A face whose clip point has been deleted comes out **unnamed**, not renamed. This is why the
+record is keyed by control point ID rather than by position in the list: a cap's face id is
+`firstCapFaceId + clip point index`, so deleting a clip point shifts every later index down
+one, and keyed by index each of those vessels' names would move quietly onto the face of the
+vessel before it. Unnamed is a thing an operator can see; a plausible wrong name is not.
+
+A mesh imported from elsewhere carries none of the record, and then every name is typed in
+this panel.
+
+### The wrong-vessel check
+
+An inherited name is only as good as the record it came from, and a wrong record is the one
+fault nothing else in the chain can see: the face ids are all on the mesh, each names a real
+clip point, every name is unique and plausible. It has happened — CFD Mesh Generator's
+boundary layer once rotated the cap ids, and on a clinical case 22 of 23 caps were named
+after another vessel with nothing anywhere saying so.
+
+So the panel asks the question ids cannot answer: is this cap where its clip point is? Each
+face's centroid is matched to the clip point positions, one to one so that two faces cannot
+both be attributed to the same end and hide a swap between them. A face that comes out
+somewhere other than where the record puts it is drawn in red and counted in the status
+line. Typing a name over it clears the complaint — an override is your own answer, and the
+record no longer applies to that face.
+
+It is advisory, not a refusal. A flow extension puts a cap at the tip of the extension rather
+than at its clip point, which on a short branch in a crowded tree can read as a disagreement
+when nothing is wrong. Being wrong the other way costs a boundary condition on the wrong
+vessel, which is worth a false alarm or two.
+
+### Persistence
+
+Every name is saved with the scene, in the module's parameter node, along with the face ids
+array and the output folder — typed here or inherited, because the scene is where everything
+else reads them from: Export names its files from them, and the workflow scripts that package
+a case from a terminal read them off the saved scene without opening Slicer. They are matched
+to faces by id, so a remesh in the same scene keeps them and only the measurements change.
+There is no file beside the mesh to keep in step.
+
+The scene also records which names were inherited, and those are worked out again from the
+clip points on every load, so the saved copy never freezes a name against a rename upstream.
+Where the clip is no longer in the scene to ask, the saved copy is what answers, and the name
+is still shown as one nobody checked.
+
+### Panel details
+
+The display buttons beside the mesh selector are not checkable: a mark would be saying what
+the display node holds, and nothing tells the panel when that changes elsewhere, so it would
+sooner or later contradict the scene. Each reads the state at the moment it is pressed and
+turns it around. Turning face colouring off leaves the mesh a slightly see-through neutral
+grey rather than whatever colour its node was created with.
+
+Hovering only shows; it leaves the selection alone, so the highlight goes back to the
+selected row when the cursor leaves the mesh. A click at the end of a camera drag is
+ignored, so rotating the view does not move the selection. The face under the cursor is
+found by where the pick landed rather than by the cell id it also reports: that id indexes
+the polydata the display pipeline built to draw the node, which for an unstructured grid
+is not the grid's own cells.
+
+### Outside Slicer
+
+All of the geometry is in `svmeshcomplete`, the package beside this module, which imports
+nothing from Slicer and is pip-installable on its own. `SimVascularMeshPrep.py` is an MRML
+adapter: it reads the selected mesh node's grid, calls the package, and reports what it
+wrote. A workflow packaging cases from a terminal calls the same functions and gets the same
+folder.
 
 That includes the naming rule. `face_table.names_from_labels` takes `{face_id: label}` and
 returns the names, sanitized and with duplicates numbered apart, so a script that has labels
