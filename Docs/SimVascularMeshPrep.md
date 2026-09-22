@@ -11,14 +11,15 @@ binds its boundary conditions through.
 
 If the surface was clipped with
 [Clip Vessel](https://github.com/vmtk/SlicerExtension-VMTK/blob/master/Docs/ClipVessel.md),
-the faces arrive already named after the clip points, so on most cases naming is a matter
+the faces arrive already named after the clip points, so in most cases naming is a matter
 of checking rather than typing.
 
 ![](SimVascularMeshPrep01.png)
 
 *A Fontan geometry with its clip points named in Clip Vessel. In SimVascular Mesh Prep the
-selected face is highlighted in the 3D view, and the face names inherited from the clip
-points are listed in the panel.*
+selected face (`cap_RSVC`) is highlighted in the 3D view, and the face names inherited
+from the clip points are listed in the panel. **Export mesh-complete** writes the folder
+for svMultiPhysics.*
 
 ## Tutorial
 
@@ -29,7 +30,7 @@ points are listed in the panel.*
 3. **Find the faces.** Move the cursor over the mesh in the 3D view: the face under it is
    highlighted. Click it to select its row in the **Faces** table. The buttons beside the
    mesh selector toggle edges, colouring by face id, transparency and visibility, which
-   helps when a cap is hidden inside the anatomy.
+   helps when a cap is hidden behind the anatomy.
 4. **Name the faces.** Type a name in the `Name` column of each row. Use `cap_<vessel>` for
    every inlet and outlet (each one gets its own boundary condition) and `wall` or
    `wall_<something>` for the vessel wall. Names become file names and boundary condition
@@ -45,7 +46,7 @@ points are listed in the panel.*
    A cleanly cut cap reads close to 0; a large value means it was not cut normal to the
    vessel.
 6. **Export.** Choose the output folder (by default `mesh` next to the saved scene) and
-   click **Export**. The button is enabled once every face has a name. The status line
+   click **Export mesh-complete**. The button is enabled once every face has a name. The status line
    below the panel reports how many faces are named, inherited or still missing a name.
 
 The names are saved with the scene, so they come back when you reopen it and survive a
@@ -65,7 +66,7 @@ mesh/
 
 ### When export is refused
 
-The module refuses to export a mesh the solver would misread without saying so:
+The module refuses to export a mesh that svMultiPhysics would misread without saying so:
 
 - **Mixed element types**, for example tetrahedra with boundary-layer prisms. Enable
   *Tetrahedralize* in CFD Mesh Generator and remesh.
@@ -76,8 +77,8 @@ The module refuses to export a mesh the solver would misread without saying so:
 
 ## Running a simulation with svMultiPhysics
 
-The exported folder is the input format of
-[svMultiPhysics](https://github.com/SimVascular/svMultiPhysics). Setting up and running a
+The exported folder is in the mesh format that
+[svMultiPhysics](https://github.com/SimVascular/svMultiPhysics) requires. Setting up and running a
 simulation from a graphical interface is under active development as part of the port of
 SimVascular to Slicer; for now, the simulation is set up and run from a terminal.
 
@@ -131,8 +132,9 @@ SimVascular to Slicer; for now, the simulation is set up and run from a terminal
    ```
 
    The results are written to a `4-procs/` folder (one per number of processes).
-7. **Look at the results.** Load the `result_*.vtu` files into Slicer (drag and drop) to
-   view velocity, pressure and wall shear stress on the mesh. The boundary integrals, such
+7. **Look at the results.** Load the `result_*.vtu` files into a visualization tool such
+   as [ParaView](https://www.paraview.org) to view velocity, pressure and wall shear
+   stress on the mesh. The boundary integrals, such
    as `B_NS_Pressure_average.txt` and `B_NS_Velocity_flux.txt`, report pressure and flow
    for each face, under the names you gave it.
 
