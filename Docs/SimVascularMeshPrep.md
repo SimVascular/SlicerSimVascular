@@ -49,7 +49,7 @@ for svMultiPhysics.*
    click **Export mesh-complete**. The button is enabled once every face has a name. The status line
    below the panel reports how many faces are named, inherited or still missing a name.
 
-The names are saved with the scene, so they come back when you reopen it and survive a
+The names are saved on the mesh, so they come back when you reopen the scene and survive a
 remesh in the same scene.
 
 ### What gets written
@@ -272,17 +272,23 @@ vessel, which is worth a false alarm or two.
 
 ### Persistence
 
-Every name is saved with the scene, in the module's parameter node, along with the face ids
-array and the output folder — typed here or inherited, because the scene is where everything
-else reads them from: Export names its files from them, and the workflow scripts that package
-a case from a terminal read them off the saved scene without opening Slicer. They are matched
-to faces by id, so a remesh in the same scene keeps them and only the measurements change.
-There is no file beside the mesh to keep in step.
+Every name is saved on the mesh node, as the attribute `SimVascularMeshPrep.FaceNames` —
+typed here or inherited, because that is where everything else reads them from: Export names
+its files from them, and the workflow scripts that package a case from a terminal read them
+off the saved scene without opening Slicer. They are matched to faces by id, so a remesh in
+the same scene keeps them and only the measurements change. There is no file beside the mesh
+to keep in step.
 
-The scene also records which names were inherited, and those are worked out again from the
-clip points on every load, so the saved copy never freezes a name against a rename upstream.
-Where the clip is no longer in the scene to ask, the saved copy is what answers, and the name
-is still shown as one nobody checked.
+On the mesh rather than in the module's own settings, which are the *scene's*: a scene
+holding a pre-op and a post-op anatomy has two face 4s, so one set of names for the scene
+put a name you typed for one anatomy onto the other's face the moment you changed the mesh
+in the selector. The face ids array and the output folder are still the scene's, as is which
+mesh the panel was left open on.
+
+A second attribute records which names were inherited, and those are worked out again from
+the clip points on every load, so the saved copy never freezes a name against a rename
+upstream. Where the clip is no longer in the scene to ask, the saved copy is what answers,
+and the name is still shown as one nobody checked.
 
 ### Panel details
 
