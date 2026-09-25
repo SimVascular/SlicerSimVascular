@@ -29,6 +29,13 @@ of a name you did not choose is that it looks like one you did -- `cap_Outlet_1`
 Vessel's positional default reads exactly like a decision, and noticing that is the point of
 having a panel at all.
 
+The names are kept **on the mesh node**, as attributes beside Clip Vessel's own record, and
+that is where everything else reads them from. A face id is a fact about one mesh: a scene
+holding a pre-op and a post-op anatomy has two face 4s, so names kept per *scene* -- which
+is what a Slicer module's parameter node is -- moved between the two the moment the selector
+changed, silently and onto a real face, which is the one failure nothing downstream can
+catch.
+
 ## Where the geometry is
 
 All of it is in `svmeshcomplete`, the package beside this file, which imports nothing from
@@ -75,19 +82,27 @@ from svmeshcomplete import cells, face_table, faces, mesh_complete
 COLUMNS = ("Face", "Name", "Cells", "Area", "Diameter", "Flatness")
 NAME_COLUMN = COLUMNS.index("Name")
 
-# Where the panel's state is kept so that it is saved with the scene, which is what makes
-# the naming survive closing Slicer. The names are the expensive part -- twenty-odd caps
-# matched to vessels by eye -- and a scene that came back without them would be a scene
-# whose mesh had to be named again.
-# FaceNames holds every name the table shows, whether it was typed here or inherited from
-# the clip. The scene is where everything outside this panel reads the names from -- the
-# Export below, and the workflow scripts that package a case from a terminal without opening
-# Slicer -- and those have to agree with each other on a scene nobody typed a name into.
-# Which of the saved names were inherited is a second parameter because only this panel
-# needs to know: it is what keeps a name still tracking the clip point it came from, and
-# what keeps it drawn as a name nobody has checked.
-NAMES_PARAMETER = "FaceNames"
-INHERITED_NAMES_PARAMETER = "InheritedFaceNames"
+# Where the names are kept, which is on the mesh they name. Slicer gives a module one
+# parameter node per *scene*, not one per thing the module is pointed at, so a name kept
+# there is one name for however many anatomies the scene holds -- and face ids collide
+# between anatomies, so the wrong set of names does not look wrong. It looks like names. An
+# attribute travels with the node instead: into the saved `.mrb`, through importing that
+# scene into another, through copying the node. It is where Clip Vessel keeps its own record
+# of which clip point named each face, for the same reason.
+#
+# FaceNames holds every name the table shows, typed here or inherited from the clip, as JSON
+# `{"<face id>": "<name>"}`. It is what everything outside this panel reads -- the Export
+# below, and the workflow scripts that package a case from a terminal without opening Slicer.
+# Which of those names were inherited is a second attribute because only this panel needs to
+# know: it is what keeps a name still tracking the clip point it came from, and what keeps it
+# drawn as a name nobody has checked.
+FACE_NAMES_ATTRIBUTE = "SimVascularMeshPrep.FaceNames"
+INHERITED_FACE_NAMES_ATTRIBUTE = "SimVascularMeshPrep.InheritedFaceNames"
+
+# The rest of the panel's state, which is about the panel rather than about a mesh, and so is
+# the scene's. InputMesh is the selection itself: it is what has the panel open on the mesh it
+# was left on rather than on whichever the selector picks first, and it no longer says
+# anything about whose names are whose.
 FACE_ID_ARRAY_PARAMETER = "FaceIdArrayNames"
 OUTPUT_DIRECTORY_PARAMETER = "OutputDirectory"
 INPUT_MESH_REFERENCE = "InputMesh"
@@ -166,14 +181,19 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         self.logic = None
         self._measured = []
         # What was typed, which is not the same as what the faces are called. The names shown
-        # are `override or inherited`: see effectiveNames(). Every name is saved with the
-        # scene, but only the typed ones are saved as typed: an inherited name is worked out
-        # again from the clip on each load, so that it cannot go stale against the clip point
-        # it came from, and the saved copy is what answers for it when the clip is no longer
-        # in the scene to ask.
-        self._overrides = {}
+        # are `override or inherited`: see effectiveNames(). Every name is saved on the mesh,
+        # but only the typed ones are saved as typed: an inherited name is worked out again
+        # from the clip on each load, so that it cannot go stale against the clip point it
+        # came from, and the saved copy is what answers for it when the clip is no longer in
+        # the scene to ask.
+        #
+        # Both are per mesh, keyed by node ID, and are read through the two properties below
+        # so that every user of them is about the selected mesh without having to remember to
+        # be. `_namesLoadedFor` is which meshes have been read off their nodes already.
+        self._overridesByNodeId = {}
+        self._savedInheritedByNodeId = {}
+        self._namesLoadedFor = set()
         self._inherited = {}
-        self._savedInherited = {}
         self._inheritedNotes = ()
         self._misplaced = {}
         self._wallFaceId = None
@@ -185,6 +205,39 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         self._cameraDrag = False
         self._viewObservers = []
         self._pickingFailed = False
+
+    # -- the two name maps, which are one mesh's rather than the scene's --------
+    def currentMeshId(self):
+        """The selected mesh's node ID, or `""` when nothing is selected.
+
+        Only ever a key into the maps held while the panel is open: node IDs are handed out
+        at load time and are not stable across saving a scene or importing one into another,
+        so nothing durable may be keyed by them. What persists is written onto the node.
+        """
+        node = self.ui.inputMeshSelector.currentNode()
+        return node.GetID() if node is not None else ""
+
+    @property
+    def _overrides(self):
+        """What somebody typed over, for the selected mesh. Mutated in place by onNameEdited."""
+        return self._overridesByNodeId.setdefault(self.currentMeshId(), {})
+
+    @property
+    def _savedInherited(self):
+        """The selected mesh's inherited names as saved, which answer when the clip is gone."""
+        return self._savedInheritedByNodeId.setdefault(self.currentMeshId(), {})
+
+    def forgetSavedNames(self):
+        """Drop every mesh's names from memory, so they are read off the nodes again.
+
+        Done whenever the scene underneath the panel changes -- loaded, imported, closed --
+        because node IDs are reassigned as nodes arrive, so a map keyed by one of them would
+        be about whatever node inherited the ID. Nothing is lost: a name is written onto its
+        mesh as it is typed.
+        """
+        self._overridesByNodeId = {}
+        self._savedInheritedByNodeId = {}
+        self._namesLoadedFor = set()
 
     def setup(self):
         ScriptedLoadableModuleWidget.setup(self)
@@ -269,41 +322,27 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
 
     def onSceneEndClose(self, caller=None, event=None):
         self._measured = []
-        self._overrides = {}
-        self._savedInherited = {}
+        self.forgetSavedNames()
         self.forgetInheritedNames()
         self.populateTable()
 
-    # -- state that is saved with the scene ---------------------------------
+    # -- state that is saved: the names on the mesh, the rest on the scene ---
     def parameterNode(self):
         return self.logic.getParameterNode()
 
     def restoreFromParameterNode(self):
-        """Put the panel back the way the scene left it."""
+        """Put the panel back the way the scene left it: the fields, and which mesh.
+
+        Not the names. Those are the meshes' own and are read off each node the first time
+        that mesh is selected; what happens here is that whatever is in memory is dropped,
+        because the scene under it has just changed.
+        """
         node = self.parameterNode()
         if node is None:
             return
         self._updating = True
         try:
-            # The saved names split back into the two kinds. What is flagged inherited goes
-            # back to being inherited -- the clip has the last word on it, so a rename
-            # upstream still arrives -- and everything else is an override. A scene saved
-            # before this flag existed carries no flags, so all of its names load as
-            # overrides, which is what they were: before there was anything to inherit,
-            # every name was typed.
-            saved = self.logic.readNamesParameter(node.GetParameter(NAMES_PARAMETER))
-            self._savedInherited = {
-                faceId: name
-                for faceId, name in self.logic.readNamesParameter(
-                    node.GetParameter(INHERITED_NAMES_PARAMETER)
-                ).items()
-                if name
-            }
-            self._overrides = {
-                faceId: name
-                for faceId, name in saved.items()
-                if faceId not in self._savedInherited
-            }
+            self.forgetSavedNames()
             arrayNames = node.GetParameter(FACE_ID_ARRAY_PARAMETER)
             if arrayNames:
                 self.ui.faceIdArrayLineEdit.text = arrayNames
@@ -322,16 +361,16 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         if node is None:
             return
         was_modifying = node.StartModify()
-        # Only when there are faces to speak for. This also runs when the output folder
-        # changes, which can happen before a mesh is selected, and writing the table then
-        # would save an empty one over the names the scene came with.
-        if self._measured:
-            names = self.effectiveNames()
-            node.SetParameter(NAMES_PARAMETER, self.logic.writeNamesParameter(
-                {faceId: name for faceId, name in names.items() if name}))
-            node.SetParameter(INHERITED_NAMES_PARAMETER, self.logic.writeNamesParameter(
+        # The names go onto the mesh, and only when there are faces to speak for: this also
+        # runs when the output folder changes, which can happen before a mesh is measured, and
+        # writing the table then would save an empty one over the names the mesh came with.
+        mesh = self.ui.inputMeshSelector.currentNode()
+        if self._measured and mesh is not None:
+            names = {faceId: name for faceId, name in self.effectiveNames().items() if name}
+            mesh.SetAttribute(FACE_NAMES_ATTRIBUTE, self.logic.writeNames(names))
+            mesh.SetAttribute(INHERITED_FACE_NAMES_ATTRIBUTE, self.logic.writeNames(
                 {faceId: name for faceId, name in names.items()
-                 if name and self.isInherited(faceId)}))
+                 if self.isInherited(faceId)}))
         node.SetParameter(FACE_ID_ARRAY_PARAMETER, self.ui.faceIdArrayLineEdit.text)
         node.SetParameter(
             OUTPUT_DIRECTORY_PARAMETER, self.ui.outputDirectoryPathLineEdit.currentPath or ""
@@ -341,6 +380,27 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
             self.ui.inputMeshSelector.currentNodeID or None,
         )
         node.EndModify(was_modifying)
+
+    def loadSavedNames(self, mesh):
+        """Read one mesh's names off it, the first time that mesh is selected.
+
+        The first time only. After that the maps in memory are the ones being edited, and
+        reading the node again would undo whatever has been typed since -- which is exactly
+        what changing the face id array field would do, since that re-measures the same mesh.
+
+        The two attributes split back into the two kinds the panel keeps them as. What is
+        flagged inherited goes back to being inherited -- the clip has the last word on it,
+        so a rename upstream still arrives -- and everything else is an override.
+        """
+        if mesh is None or mesh.GetID() in self._namesLoadedFor:
+            return
+        self._namesLoadedFor.add(mesh.GetID())
+        saved = self.logic.readNames(mesh.GetAttribute(FACE_NAMES_ATTRIBUTE))
+        inherited = {faceId: name for faceId, name in self.logic.readNames(
+            mesh.GetAttribute(INHERITED_FACE_NAMES_ATTRIBUTE)).items() if name}
+        self._savedInheritedByNodeId[mesh.GetID()] = inherited
+        self._overridesByNodeId[mesh.GetID()] = {
+            faceId: name for faceId, name in saved.items() if faceId not in inherited}
 
     def onOutputDirectoryChanged(self, *_args):
         if not self._updating:
@@ -558,9 +618,9 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         The clip has the last word wherever the record and its markups node are both in the
         scene, which is what makes a rename upstream arrive - including when the clip's word
         is that the face has no name any more, a clip point deleted since the mesh was made.
-        Only where the chain is not there to consult does the copy saved with the scene
-        answer, which is how a name survives into a scene that no longer carries the clip it
-        came from.
+        Only where the chain is not there to consult does the copy saved on the mesh answer,
+        which is how a name survives into a scene that no longer carries the clip it came
+        from.
         """
         if faceId in self._inherited:
             return self._inherited[faceId]
@@ -645,12 +705,20 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
 
     # -- reading the mesh --------------------------------------------------
     def onMeshChanged(self, _node=None):
-        """Measure the selected mesh's faces, keeping any names already typed."""
+        """Measure the selected mesh's faces, keeping any names already typed on *it*.
+
+        Both halves of that matter. Typing has to survive a re-measure of the same mesh --
+        changing the face id array field comes through here, and losing a name over it would
+        be infuriating -- and it must not survive a switch to a different mesh, which is a
+        different anatomy whose face 4 is a different face. The names are the mesh's, so
+        selecting one reads its own; see loadSavedNames.
+        """
         self._measured = []
         self._lookup = None
         self._hovered = None
         self.forgetInheritedNames()
         node = self.ui.inputMeshSelector.currentNode()
+        self.loadSavedNames(node)
         mesh = node.GetMesh() if node else None
         if mesh is None:
             self.setStatus(
@@ -1117,22 +1185,26 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
         return os.path.join(directory, "mesh") if os.path.isdir(directory) else ""
 
     @staticmethod
-    def writeNamesParameter(names):
-        """The names as one string, for a parameter node to carry into a saved scene."""
+    def writeNames(names):
+        """The names as one JSON string, for a mesh node to carry into a saved scene.
+
+        `{"<face id>": "<name>"}`, face ids as strings because JSON keys are strings, sorted
+        so that saving a scene twice without touching a name produces the same bytes twice.
+        """
         return json.dumps(
             {str(face_id): name for face_id, name in sorted(names.items())},
             separators=(",", ":"),
         )
 
     @staticmethod
-    def readNamesParameter(text):
+    def readNames(text):
         """The names back out, and nothing at all rather than an exception from a bad one."""
         if not text:
             return {}
         try:
             stored = json.loads(text)
         except ValueError:
-            logging.warning("Mesh Prep could not read the face names saved with this scene.")
+            logging.warning("Mesh Prep could not read the face names saved with this mesh.")
             return {}
         names = {}
         for face_id, name in stored.items():
@@ -1145,7 +1217,7 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
     def export(self, mesh, measured, names, directory, faceIdArrayNames):
         """Write the mesh-complete folder, through the package's own checks.
 
-        The names are not written beside it. They are saved with the scene, which is
+        The names are not written beside it. They are saved on the mesh node, which is
         where anything needing them reads them from -- including the workflow scripts that
         package cases from a terminal. A copy in the folder would be a second answer to
         the same question, and the one that goes stale is the one on disk.
@@ -1351,26 +1423,32 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         self.setUp()
         self.test_namesAreInheritedFromTheClip()
         self.setUp()
-        self.test_everyNameIsSavedWithTheSceneAndInheritedOnesStillFollowTheClip()
+        self.test_everyNameIsSavedOnTheMeshAndInheritedOnesStillFollowTheClip()
         self.setUp()
         self.test_aSavedInheritedNameStandsWhenTheClipIsGone()
+        self.setUp()
+        self.test_twoAnatomiesInOneSceneKeepTheirOwnNames()
         self.setUp()
         self.test_thePanelInheritsFollowsAndOverrides()
         self.setUp()
         self.test_thePanelSaysWhenAnInheritedNameIsOnTheWrongVessel()
 
     # -- inherited names ---------------------------------------------------
-    def recordedMesh(self, labels, faceIdsByIndex=(2, 3), wallFaceId=1):
+    def recordedMesh(self, labels, faceIdsByIndex=(2, 3), wallFaceId=1, name="volume mesh"):
         """A volume mesh carrying Clip Vessel's record, as one out of CFD Mesh Generator does.
 
         Built by hand rather than by running a clip: the clip is another extension's, and what
         this module has to be held to is reading the record, not producing it.
+
+        `name` is worth passing when a test builds two of these: the faces are the same three
+        ids on both, which is the whole difficulty, so the nodes are what tells them apart.
         """
         from svmeshcomplete import testing
 
-        mesh = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", "volume mesh")
+        mesh = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", name)
         mesh.SetAndObserveMesh(testing.cube_mesh())
-        clipPoints = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode", "Clip points")
+        clipPoints = slicer.mrmlScene.AddNewNodeByClass(
+            "vtkMRMLMarkupsFiducialNode", f"{name} clip points")
         controlPointIds = []
         for label in labels:
             index = clipPoints.AddControlPoint([0.0, 0.0, 0.0])
@@ -1418,8 +1496,8 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
 
         self.delayDisplay("Names inherited, followed, and dropped with their clip point")
 
-    def test_everyNameIsSavedWithTheSceneAndInheritedOnesStillFollowTheClip(self):
-        """The scene carries every name the table shows, and says which were not typed.
+    def test_everyNameIsSavedOnTheMeshAndInheritedOnesStillFollowTheClip(self):
+        """The mesh carries every name the table shows, and says which were not typed.
 
         The saving half is what anything outside this panel depends on: Export names its files
         from what the table shows, and the workflow scripts that package a case from a terminal
@@ -1443,48 +1521,41 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
                     if int(table.item(row, 0).text()) == faceId][0]
 
         # One typed name against two inherited ones, typed through the table so that it is
-        # the panel's own save being tested and not a parameter written by hand.
+        # the panel's own save being tested and not an attribute written by hand.
         row = rowOf(3)
         widget.ui.facesTable.item(row, NAME_COLUMN).setText("cap_azygous")
         widget.onNameEdited(row, NAME_COLUMN)
 
-        parameters = logic.getParameterNode()
         self.assertEqual(
-            logic.readNamesParameter(parameters.GetParameter(NAMES_PARAMETER)),
+            logic.readNames(mesh.GetAttribute(FACE_NAMES_ATTRIBUTE)),
             {1: "wall", 2: "cap_Inlet", 3: "cap_azygous"},
             "every name the table shows has to be saved, typed here or not")
         self.assertEqual(
-            logic.readNamesParameter(parameters.GetParameter(INHERITED_NAMES_PARAMETER)),
+            logic.readNames(mesh.GetAttribute(INHERITED_FACE_NAMES_ATTRIBUTE)),
             {1: "wall", 2: "cap_Inlet"},
-            "and the scene has to say which of them nobody typed")
+            "and the mesh has to say which of them nobody typed")
 
         import tempfile
         with tempfile.TemporaryDirectory() as directory:
             bundle = os.path.join(directory, "scene.mrb")
             self.assertTrue(slicer.util.saveScene(bundle))
             # The parameter node is a singleton and Clear() keeps the singletons, so it is
-            # taken out by hand - otherwise what comes back below is the node still in memory
-            # and this asserts nothing about the scene on disk. Not Clear(1), which takes the
-            # layout node with it and segfaults a running main window.
+            # taken out by hand - otherwise the selection that comes back below is the one
+            # still in memory. Not Clear(1), which takes the layout node with it and segfaults
+            # a running main window.
             slicer.mrmlScene.Clear()
             slicer.mrmlScene.RemoveNode(logic.getParameterNode())
-            self.assertEqual(
-                logic.readNamesParameter(logic.getParameterNode().GetParameter(NAMES_PARAMETER)),
-                {}, "the parameter node should be empty before the scene is read back")
-
             self.assertTrue(slicer.util.loadScene(bundle))
 
             logic = SimVascularMeshPrepLogic()
-            restored = logic.getParameterNode()
+            reloadedMesh = logic.getParameterNode().GetNodeReference(INPUT_MESH_REFERENCE)
             # What a reader with no panel open and no clip to consult gets: all three.
             self.assertEqual(
-                logic.readNamesParameter(restored.GetParameter(NAMES_PARAMETER)),
+                logic.readNames(reloadedMesh.GetAttribute(FACE_NAMES_ATTRIBUTE)),
                 {1: "wall", 2: "cap_Inlet", 3: "cap_azygous"})
             self.assertEqual(
-                logic.readNamesParameter(restored.GetParameter(INHERITED_NAMES_PARAMETER)),
+                logic.readNames(reloadedMesh.GetAttribute(INHERITED_FACE_NAMES_ATTRIBUTE)),
                 {1: "wall", 2: "cap_Inlet"})
-
-            reloadedMesh = restored.GetNodeReference(INPUT_MESH_REFERENCE)
             self.assertEqual(logic.inheritedNames(reloadedMesh).names,
                              {1: "wall", 2: "cap_Inlet", 3: "cap_Outlet_1"})
 
@@ -1497,12 +1568,12 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
             self.assertEqual(widget.effectiveNames(),
                              {1: "wall", 2: "cap_RSVC", 3: "cap_azygous"})
 
-        self.delayDisplay("Every name saved, inherited ones still following the clip")
+        self.delayDisplay("Every name saved on its mesh, inherited ones following the clip")
 
     def test_aSavedInheritedNameStandsWhenTheClipIsGone(self):
         """A name inherited when the scene was saved answers for a face with no record.
 
-        The face keeps the name rather than going blank, because the scene is the only copy of
+        The face keeps the name rather than going blank, because the mesh is the only copy of
         it left -- but it is still drawn as a name nobody checked, which is the whole point of
         drawing inherited names differently. A clip point *deleted* while the clip is still in
         the scene is the other case and stays unnamed: there the clip can be asked, and what it
@@ -1513,29 +1584,99 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         widget = slicer.util.getModuleWidget("SimVascularMeshPrep")
         plain = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", "imported mesh")
         plain.SetAndObserveMesh(testing.cube_mesh())
-
-        parameters = widget.logic.getParameterNode()
-        parameters.SetParameter(FACE_ID_ARRAY_PARAMETER, "CellEntityIds, ModelFaceID")
-        parameters.SetParameter(NAMES_PARAMETER, widget.logic.writeNamesParameter(
+        plain.SetAttribute(FACE_NAMES_ATTRIBUTE, widget.logic.writeNames(
             {1: "wall", 2: "cap_RSVC", 3: "cap_azygous"}))
-        parameters.SetParameter(INHERITED_NAMES_PARAMETER, widget.logic.writeNamesParameter(
+        plain.SetAttribute(INHERITED_FACE_NAMES_ATTRIBUTE, widget.logic.writeNames(
             {1: "wall", 2: "cap_RSVC"}))
-        parameters.SetNodeReferenceID(INPUT_MESH_REFERENCE, plain.GetID())
-        widget.restoreFromParameterNode()
+
+        widget.ui.faceIdArrayLineEdit.text = "CellEntityIds, ModelFaceID"
+        widget.ui.inputMeshSelector.setCurrentNode(plain)
 
         self.assertEqual(widget.effectiveNames(),
                          {1: "wall", 2: "cap_RSVC", 3: "cap_azygous"},
-                         "a mesh with no record still shows the names the scene saved")
+                         "a mesh with no record still shows the names saved on it")
         self.assertTrue(widget.isInherited(2), "and still says nobody checked them")
         self.assertFalse(widget.isInherited(3))
 
         # Saving again keeps them, rather than writing back a table stripped of them.
         widget.saveToParameterNode()
         self.assertEqual(
-            widget.logic.readNamesParameter(parameters.GetParameter(NAMES_PARAMETER)),
+            widget.logic.readNames(plain.GetAttribute(FACE_NAMES_ATTRIBUTE)),
             {1: "wall", 2: "cap_RSVC", 3: "cap_azygous"})
 
         self.delayDisplay("Saved inherited names stand without the clip")
+
+    def test_twoAnatomiesInOneSceneKeepTheirOwnNames(self):
+        """A name typed on one anatomy must not land on another's face of the same id.
+
+        A face id is a number, and a scene holding a pre-op and a post-op anatomy has two face
+        3s. The names used to be kept in the module's parameter node, which is the *scene's* --
+        one set of them however many meshes -- and a change of selected mesh deliberately kept
+        what had been typed, which is right for a re-measure of the same mesh and wrong for a
+        switch to a different one. So selecting the other anatomy put the first one's name on
+        its face 3, and moved the reference saying whose names these were in the same call: the
+        contaminated set then honestly claimed to be the second anatomy's, which is why no
+        reader could catch it. Nothing was said, and what landed looked like a name.
+
+        Both directions are checked, because the carry-over that made the bug is a feature in
+        its own place: what was typed has to still be there on coming back.
+        """
+        widget = slicer.util.getModuleWidget("SimVascularMeshPrep")
+        preop, _preopClip = self.recordedMesh(("Inlet", "Outlet 1"), name="preop mesh")
+        postop, _postopClip = self.recordedMesh(("Inlet", "Outlet 1"), name="postop mesh")
+        widget.ui.faceIdArrayLineEdit.text = "CellEntityIds, ModelFaceID"
+
+        table = widget.ui.facesTable
+
+        def rowOf(faceId):
+            return [row for row in range(table.rowCount)
+                    if int(table.item(row, 0).text()) == faceId][0]
+
+        def typeName(faceId, name):
+            row = rowOf(faceId)
+            table.item(row, NAME_COLUMN).setText(name)
+            widget.onNameEdited(row, NAME_COLUMN)
+
+        def shown():
+            return {int(table.item(row, 0).text()): table.item(row, NAME_COLUMN).text()
+                    for row in range(table.rowCount)}
+
+        widget.ui.inputMeshSelector.setCurrentNode(preop)
+        typeName(3, "cap_azygous")
+
+        # Selecting the other anatomy. Nothing was typed on it, so nothing is typed on it.
+        widget.ui.inputMeshSelector.setCurrentNode(postop)
+        self.assertEqual(widget._overrides, {},
+                         "a name typed on one anatomy is not a name typed on another")
+        self.assertEqual(shown()[3], "cap_Outlet_1",
+                         "post-op's face 3 keeps the name its own clip gave it")
+        typeName(3, "cap_azygous_stump")
+
+        # Back and forth: each keeps its own, and typing survives being selected away from,
+        # which is what the carry-over was for.
+        widget.ui.inputMeshSelector.setCurrentNode(preop)
+        self.assertEqual(widget._overrides, {3: "cap_azygous"})
+        self.assertEqual(shown()[3], "cap_azygous")
+        widget.ui.inputMeshSelector.setCurrentNode(postop)
+        self.assertEqual(widget._overrides, {3: "cap_azygous_stump"})
+        self.assertEqual(shown()[3], "cap_azygous_stump")
+
+        # Each name is on its own mesh, which is what makes that survive the scene.
+        self.assertEqual(
+            widget.logic.readNames(preop.GetAttribute(FACE_NAMES_ATTRIBUTE)),
+            {1: "wall", 2: "cap_Inlet", 3: "cap_azygous"})
+        self.assertEqual(
+            widget.logic.readNames(postop.GetAttribute(FACE_NAMES_ATTRIBUTE)),
+            {1: "wall", 2: "cap_Inlet", 3: "cap_azygous_stump"})
+
+        # Re-measuring the same mesh is the case the carry-over exists for: changing the face
+        # id array comes through onMeshChanged exactly as a change of mesh does, and must not
+        # cost anybody their typing.
+        widget.ui.faceIdArrayLineEdit.text = "ModelFaceID, CellEntityIds"
+        widget.onMeshChanged()
+        self.assertEqual(widget._overrides, {3: "cap_azygous_stump"})
+
+        self.delayDisplay("Two anatomies in one scene keep their own typed names")
 
     def test_thePanelInheritsFollowsAndOverrides(self):
         """The three behaviours the split between overrides and inherited names buys.
@@ -1771,48 +1912,56 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         self.delayDisplay("Measured, named, exported, highlighted and coloured")
 
     def test_namesSurviveASavedScene(self):
-        """The naming is the expensive part, so it has to come back with the scene."""
+        """The naming is the expensive part, so it has to come back with the mesh.
+
+        One name here holds a `;`, which is the separator MRML writes a node's attributes
+        with -- `key:value;key:value` -- and a name that broke the node it was on would not
+        fail loudly anywhere in this module. Slicer percent-encodes the separator, so it does
+        not break it; this is the check that says so, because the whole scheme rests on it.
+        """
         import tempfile
 
         from svmeshcomplete import testing
 
         logic = SimVascularMeshPrepLogic()
-        names = {1: "wall", 2: "cap_RSVC", 3: "cap_lpa_a"}
+        names = {1: "wall", 2: "cap_RSVC", 3: "cap_lpa_a;b"}
 
         mesh = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", "volume mesh")
         mesh.SetAndObserveMesh(testing.cube_mesh())
+        mesh.SetAttribute(FACE_NAMES_ATTRIBUTE, logic.writeNames(names))
+        mesh.SetAttribute(INHERITED_FACE_NAMES_ATTRIBUTE, logic.writeNames({1: "wall"}))
 
         parameters = logic.getParameterNode()
-        parameters.SetParameter(NAMES_PARAMETER, logic.writeNamesParameter(names))
         parameters.SetParameter(FACE_ID_ARRAY_PARAMETER, "CellEntityIds, ModelFaceID")
         parameters.SetNodeReferenceID(INPUT_MESH_REFERENCE, mesh.GetID())
 
         scene = os.path.join(tempfile.mkdtemp(), "scene.mrb")
         self.assertTrue(slicer.util.saveScene(scene))
 
-        # The parameter node is what must not survive, or this would be testing that a value
-        # is still in memory rather than that it came back off disk. It is a singleton, so it
-        # is taken out by hand: Clear(1) removes every singleton, and taking the layout node
-        # out from under a running main window segfaults the layout manager ("The layout to be
-        # removed is not the same as the stored one") - which made this test crash Slicer
-        # whenever it was run from the Reload and Test button rather than headless.
+        # Nothing may survive in memory, or this would be testing that a value is still there
+        # rather than that it came back off disk. The parameter node is a singleton and Clear()
+        # keeps the singletons, so it is taken out by hand: Clear(1) removes every singleton,
+        # and taking the layout node out from under a running main window segfaults the layout
+        # manager ("The layout to be removed is not the same as the stored one") - which made
+        # this test crash Slicer whenever it was run from Reload and Test rather than headless.
         slicer.mrmlScene.Clear()
         slicer.mrmlScene.RemoveNode(logic.getParameterNode())
-        self.assertEqual(
-            logic.readNamesParameter(logic.getParameterNode().GetParameter(NAMES_PARAMETER)), {}
-        )
+        self.assertIsNone(logic.getParameterNode().GetNodeReference(INPUT_MESH_REFERENCE))
 
         self.assertTrue(slicer.util.loadScene(scene))
         restored = logic.getParameterNode()
+        reloaded = restored.GetNodeReference(INPUT_MESH_REFERENCE)
+        self.assertIsNotNone(reloaded, "the panel comes back open on the mesh it was left on")
+        self.assertEqual(logic.readNames(reloaded.GetAttribute(FACE_NAMES_ATTRIBUTE)), names,
+                         "the names came back on the mesh, separator and all")
         self.assertEqual(
-            logic.readNamesParameter(restored.GetParameter(NAMES_PARAMETER)), names
-        )
+            logic.readNames(reloaded.GetAttribute(INHERITED_FACE_NAMES_ATTRIBUTE)),
+            {1: "wall"}, "and so did which of them nobody typed")
         self.assertEqual(
             restored.GetParameter(FACE_ID_ARRAY_PARAMETER), "CellEntityIds, ModelFaceID"
         )
-        self.assertIsNotNone(restored.GetNodeReference(INPUT_MESH_REFERENCE))
 
-        # A parameter that is not readable loses the names rather than the panel.
-        self.assertEqual(logic.readNamesParameter("not json"), {})
+        # An attribute that is not readable loses the names rather than the panel.
+        self.assertEqual(logic.readNames("not json"), {})
 
         self.delayDisplay("Names survived a saved scene")
