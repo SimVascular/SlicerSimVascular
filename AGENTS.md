@@ -1,8 +1,8 @@
 # Notes for coding agents
 
-3D Slicer extension holding the SimVascular modules the Marsden lab develops. Four scripted
+3D Slicer extension holding the SimVascular modules the Marsden lab develops. Five scripted
 modules, registered in `CMakeLists.txt`: `SDFStent`, `PaintModel`, `FaceAwareRemesh`,
-`SimVascularMeshPrep`. Each has a page under `Docs/`, linked from `README.md`.
+`SimVascularMeshPrep`, `seqseg` (directory `SeqSeg/`). Each has a page under `Docs/`, linked from `README.md`.
 
 Paths below are relative to the repository root. The last section covers optional local
 tooling, and says where it is assumed to live.
@@ -21,7 +21,19 @@ the split: a workflow packaging cases from a terminal calls the same functions a
 answer, and the tests need neither Slicer nor a mesher. Keep it that way. If a change needs
 MRML, it belongs in the module file, not the package.
 
-`SDFStent` and `PaintModel` predate that pattern and don't follow it.
+`SDFStent` and `PaintModel` predate that pattern and don't follow it, and neither does `seqseg`.
+
+**`seqseg` came from the standalone
+[SlicerSeqSeg](https://github.com/numisveinsson/SlicerSeqSeg) extension** and is developed here
+now; that repository is retired, so don't send fixes there. Three things it brought with it:
+
+- **It is Apache-2.0**, under its own `SeqSeg/LICENSE.txt`, not this repo's BSD licence.
+- **Its PyTorch and NNUNet dependencies are left out of `EXTENSION_DEPENDS` on purpose**, so
+ installing SimVascular for the meshing modules doesn't pull in PyTorch. The module checks for
+ them itself when run, and `parent.dependencies` stays empty for the same reason: listing them
+ there stops Slicer opening the module at all when they are missing, before it can say why.
+- **The lowercase module name is load-bearing**: the settings keys and the `.ui` lookup are
+ derived from it, so renaming it to match the other modules loses users' saved settings.
 
 ## Running the tests
 
