@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SimVascularMultiPhysics</class>
+ <widget class="qMRMLWidget" name="SimVascularMultiPhysics">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>460</width>
+    <height>900</height>
+   </rect>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="ctkCollapsibleButton" name="inputCollapsibleButton">
+     <property name="text">
+      <string>Mesh</string>
+     </property>
+     <layout class="QFormLayout" name="inputFormLayout">
+      <item row="0" column="0">
+       <widget class="QLabel" name="inputMeshLabel">
+        <property name="text">
+         <string>Volume mesh:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="qMRMLNodeComboBox" name="inputMeshSelector">
+        <property name="toolTip">
+         <string>The volume mesh to simulate, its faces named in SimVascular Mesh Prep: the mesh CFD Mesh Generator made. The face names become the solver's face and boundary condition names, and what the results come back labelled with.</string>
+        </property>
+        <property name="nodeTypes">
+         <stringlist notr="true">
+          <string>vtkMRMLModelNode</string>
+         </stringlist>
+        </property>
+        <property name="noneEnabled">
+         <bool>true</bool>
+        </property>
+        <property name="addEnabled">
+         <bool>false</bool>
+        </property>
+        <property name="removeEnabled">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0" colspan="2">
+       <widget class="QLabel" name="meshStatusLabel">
+        <property name="text">
+         <string/>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QPushButton" name="openMeshPrepButton">
+        <property name="text">
+         <string>Name the faces in SimVascular Mesh Prep</string>
+        </property>
+        <property name="toolTip">
+         <string>Open this mesh in SimVascular Mesh Prep, where its faces are named. A mesh out of Clip Vessel arrives named after its clip points; opening it there is enough to save those names on it.</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="boundaryCollapsibleButton">
+     <property name="text">
+      <string>Boundary conditions</string>
+     </property>
+     <layout class="QVBoxLayout" name="boundaryVerticalLayout">
+      <item>
+       <widget class="QLabel" name="boundaryHelpLabel">
+        <property name="text">
+         <string>One condition per cap: an inflow for the inlets, and RCR or resistance BCs for the outlets. The walls do not slip. These are the same conditions SimVascular ROM Simulation sets for this mesh.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QTableWidget" name="facesTable">
+        <property name="toolTip">
+         <string>One row per cap. Selecting a row shows that cap in the 3D view. Choose the kind of condition, then double-click its values to type them in the order the hint below says. An inflow's waveform is loaded by double-clicking its values, which asks for a .flow file; a steady inflow is typed by selecting the cell and typing the flow. Values are cgs: flow mL/s, resistance dyn·s/cm⁵, compliance cm⁵/dyn, pressure dyn/cm² (1 mmHg = 1333.22).</string>
+        </property>
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>240</height>
+         </size>
+        </property>
+        <property name="selectionBehavior">
+         <enum>QAbstractItemView::SelectRows</enum>
+        </property>
+        <property name="selectionMode">
+         <enum>QAbstractItemView::ExtendedSelection</enum>
+        </property>
+        <property name="alternatingRowColors">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="valuesHintLabel">
+        <property name="text">
+         <string/>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="simulationCollapsibleButton">
+     <property name="text">
+      <string>CFD Simulation</string>
+     </property>
+     <layout class="QVBoxLayout" name="simulationVerticalLayout">
+      <item>
+       <layout class="QFormLayout" name="simulationFormLayout">
+        <item row="0" column="0">
+         <widget class="QLabel" name="outputDirectoryLabel">
+          <property name="text">
+           <string>Output folder:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="0" column="1">
+         <widget class="ctkPathLineEdit" name="outputDirectoryPathLineEdit">
+          <property name="toolTip">
+           <string>Where the case is written: solver.xml, the mesh folder it reads and the inflow waveforms. Every path in solver.xml is relative to this folder, which is the one svMultiPhysics is run from, so it can be moved as a whole. Created if it does not exist.</string>
+          </property>
+          <property name="filters">
+           <set>ctkPathLineEdit::Dirs|ctkPathLineEdit::Writable</set>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QLabel" name="settingsHelpLabel">
+        <property name="text">
+         <string>Every setting starts at its default; change any of them below. A changed value is shown in bold.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QWidget" name="settingsContainer">
+        <layout class="QVBoxLayout" name="settingsLayout">
+         <property name="leftMargin">
+          <number>0</number>
+         </property>
+         <property name="topMargin">
+          <number>0</number>
+         </property>
+         <property name="rightMargin">
+          <number>0</number>
+         </property>
+         <property name="bottomMargin">
+          <number>0</number>
+         </property>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="resetSettingsButton">
+        <property name="text">
+         <string>Reset settings to defaults</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="createSolverFilesButton">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="text">
+         <string>Create solver files</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="statusLabel">
+     <property name="text">
+      <string/>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>ctkCollapsibleButton</class>
+   <extends>QWidget</extends>
+   <header>ctkCollapsibleButton.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>ctkPathLineEdit</class>
+   <extends>QWidget</extends>
+   <header>ctkPathLineEdit.h</header>
+  </customwidget>
+  <customwidget>
+   <class>qMRMLNodeComboBox</class>
+   <extends>QWidget</extends>
+   <header>qMRMLNodeComboBox.h</header>
+  </customwidget>
+  <customwidget>
+   <class>qMRMLWidget</class>
+   <extends>QWidget</extends>
+   <header>qMRMLWidget.h</header>
+   <container>1</container>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections>
+  <connection>
+   <sender>SimVascularMultiPhysics</sender>
+   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+   <receiver>inputMeshSelector</receiver>
+   <slot>setMRMLScene(vtkMRMLScene*)</slot>
+  </connection>
+ </connections>
+</ui>

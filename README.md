@@ -10,6 +10,8 @@ This repository provides 3D Slicer modules for [SimVascular](https://github.com/
 - [Paint Model (PaintModel)](Docs/PaintModel.md): Interactively paint, group, and export face regions on surface models, with a face-grouping workflow inspired by Autodesk Meshmixer.
 - [Face Aware Remesh (FaceAwareRemesh)](Docs/FaceAwareRemesh.md): Remesh a surface model to a uniform edge length while keeping its `ModelFaceID` face labels, the seams between them, and the corners where they meet.
 - [SimVascular Mesh Prep (SimVascularMeshPrep)](Docs/SimVascularMeshPrep.md): Name the faces of a volume mesh and write the mesh-complete folder an svMultiPhysics case reads.
+- [SimVascular ROM Simulation (SimVascularROM)](Docs/SimVascularROM.md): Set up, run and look at a 0D svZeroDSolver simulation of a model whose faces Mesh Prep named, with centerlines from SlicerVMTK.
+- [SimVascular MultiPhysics (SimVascularMultiPhysics)](Docs/SimVascularMultiPhysics.md): Write the svMultiPhysics rigid-wall CFD case (solver.xml, mesh folder and inflow waveforms) for a model whose faces Mesh Prep named, with the boundary conditions shared with the ROM panel.
 
 ## Licence
 
