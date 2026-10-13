@@ -61,7 +61,7 @@ class seqseg(ScriptedLoadableModule):
         self.parent.helpText = _("""
 SeqSeg Vessel Segmentation is a seed-based vascular segmentation module for 3D Slicer. It uses the SeqSeg Python package,
 requires one or more seed lines (start + direction; radius is the line length) and a volume as input, and produces a segmentation, surface mesh, and centerline.
-The first <b>Run SeqSeg</b> installs <b>torch 2.2.2</b> and <b>nnunetv2</b> if they are missing: through the PyTorch and Slicer NNUNet extensions when those are installed, and with pip otherwise. Pretrained nnUNet weights use the <b>Download Aorta Weights (CT/MR)</b> and <b>Download Coronary CT Weights</b> buttons in <b>nnUNet Configuration</b>.
+The first <b>Run SeqSeg</b> installs <b>torch 2.2.2</b> and <b>nnunetv2</b> if they are missing: through the PyTorch and Slicer NNUNet extensions when those are installed, and with pip otherwise. Pretrained nnUNet weights for the selected <b>Model Weights</b> entry are downloaded on that run, after a confirm dialog, if they are not already in Slicer's SeqSeg folder.
 See more information in <a href="https://github.com/numisveinsson/SeqSeg">SeqSeg package documentation</a>.
 """)
         self.parent.acknowledgementText = _("""
@@ -182,6 +182,125 @@ def train_dataset_id_from_ui_value(value: str) -> Optional[str]:
     return None
 
 
+# Aorta MR and Aorta CT are one Zenodo archive, so choosing either model installs
+# both. Coronary CT and Fontan MR (orig) are separate archives. Fontan MR (003)
+# has no archive: Run only proceeds when a results folder already contains it.
+WEIGHT_PROFILES = (
+    {
+        "datasets": (
+            "Dataset005_SEQAORTANDFEMOMR",
+            "Dataset006_SEQAORTANDFEMOCT",
+        ),
+        # The archive is named nnUNet_results.zip, but the dataset folders
+        # (Dataset005_…, Dataset006_…) sit at the top of the zip. There is no
+        # nnUNet_results directory inside it.
+        "url": "https://zenodo.org/records/15020477/files/nnUNet_results.zip?download=1",
+        "zip_filename": "nnUNet_results.zip",
+        "extracted_dir_name": "nnUNet_results",
+        "record_url": "https://zenodo.org/records/15020477",
+        "progress_label": "Downloading Aorta weights (CT/MR) (236.3 MB)...",
+        "confirm_detail": (
+            "Aorta CT and Aorta MR share one archive (236.3 MB). "
+            "Downloading either model installs both."
+        ),
+    },
+    {
+        "datasets": ("Dataset010_SEQCOROASOCACT",),
+        "url": "https://zenodo.org/records/19547894/files/nnUNet_results_coronary.zip?download=1",
+        "zip_filename": "nnUNet_results_coronary.zip",
+        "extracted_dir_name": "nnUNet_results_coronary",
+        "record_url": "https://zenodo.org/records/19547894",
+        "progress_label": "Downloading Coronary CT weights (~2.7 MB)...",
+        "confirm_detail": "The Coronary CT archive is about 2.7 MB.",
+    },
+    {
+        "datasets": ("Dataset090_VMR_FONTAN_ORIGMR",),
+        # The zip's top folder is the dataset id, not a results bundle like
+        # nnUNet_results.zip. extract_into_results_dir unpacks it under its own
+        # parent so SeqSeg receives a folder that contains Dataset090_…
+        "url": "https://zenodo.org/records/20056802/files/Dataset090_VMR_FONTAN_ORIGMR.zip?download=1",
+        "zip_filename": "Dataset090_VMR_FONTAN_ORIGMR.zip",
+        "extracted_dir_name": "nnUNet_results_fontan_orig",
+        "extract_into_results_dir": True,
+        "record_url": "https://zenodo.org/records/20056802",
+        "progress_label": "Downloading Fontan MR (orig) weights (~10.7 MB)...",
+        "confirm_detail": (
+            "The Fontan MR (orig) archive is about 10.7 MB. "
+            "The model was trained in cm."
+        ),
+    },
+)
+
+# Trees written by the old download buttons, before the path was chosen for the user.
+LEGACY_WEIGHTS_DIR = os.path.join(os.path.expanduser("~"), "SeqSeg_Weights")
+
+
+def weight_profile_for_dataset(dataset_id: str):
+    """Return the downloadable archive that contains this dataset, or None."""
+    for profile in WEIGHT_PROFILES:
+        if dataset_id in profile["datasets"]:
+            return profile
+    return None
+
+
+def dataset_weights_present(results_path: str, dataset_id: str) -> bool:
+    """A results tree counts only when it contains this dataset's folder.
+
+    Aorta and coronary unpack to different parents. Treating the parent
+    directory as enough would let a coronary tree satisfy an aorta run.
+    """
+    if not results_path or not dataset_id:
+        return False
+    return os.path.isdir(os.path.join(results_path, dataset_id))
+
+
+def results_dir_containing_dataset(extract_root: str, dataset_id: str) -> Optional[str]:
+    """Return the folder SeqSeg should receive, or None.
+
+    The aorta archive puts Dataset005_… and Dataset006_… directly in the
+    weights folder, so that folder itself is the results path. One extra
+    directory is allowed when a zip wraps the dataset, and a parent that
+    merely exists is not a match.
+    """
+    if dataset_weights_present(extract_root, dataset_id):
+        return extract_root
+    if not extract_root or not os.path.isdir(extract_root):
+        return None
+    for name in os.listdir(extract_root):
+        nested = os.path.join(extract_root, name)
+        if dataset_weights_present(nested, dataset_id):
+            return nested
+    return None
+
+
+def managed_weights_root() -> str:
+    """Folder beside Slicer's user settings file. The user never picks it."""
+    settings_file = slicer.app.slicerUserSettingsFilePath
+    return os.path.join(os.path.dirname(settings_file), "SeqSeg", "weights")
+
+
+def find_existing_weights(dataset_id: str, stored_path: str = "") -> Optional[str]:
+    """Return a results folder that already contains this dataset, or None.
+
+    New downloads live under Slicer's settings directory. A tree left in
+    ~/SeqSeg_Weights by the old download buttons is reused so that archive
+    is not fetched again. A path already stored on the parameter node is
+    last: it covers Fontan models (no archive) and a results tree saved
+    with a scene.
+    """
+    profile = weight_profile_for_dataset(dataset_id)
+    if profile:
+        for root in (managed_weights_root(), LEGACY_WEIGHTS_DIR):
+            found = results_dir_containing_dataset(root, dataset_id)
+            if found:
+                return found
+    if stored_path:
+        found = results_dir_containing_dataset(stored_path, dataset_id)
+        if found:
+            return found
+    return None
+
+
 def line_length(start, end) -> float:
     """Euclidean length between two 3D points."""
     dx = float(end[0]) - float(start[0])
@@ -216,13 +335,21 @@ class seqsegParameterNode:
     imageUnit: Annotated[str, Choice(["cm", "mm"])] = "cm"  # Image unit (mm or cm); cm first — MRML/connectGui often defaults to first Choice()
     scale: Annotated[str, Choice(["0.1", "1", "10"])] = "1"  # SeqSeg -scale vs. nnUNet training units
     coordinateSystem: Annotated[str, Choice(["LPS World", "RAS World"])] = "LPS World"  # Coordinate system for seed points
-    nnunetResultsPath: str = ""  # Path to nnUNet results folder
+    nnunetResultsPath: str = ""  # Set at run from the selected model; not edited in the panel
     nnunetType: Annotated[str, Choice(["3d_fullres", "2d"])] = "3d_fullres"  # Type of nnUNet model
     trainDataset: Annotated[str, Choice(list(KNOWN_TRAIN_DATASETS))] = "Dataset005_SEQAORTANDFEMOMR"  # Training dataset name
     outputDirectory: str = ""  # Directory for SeqSeg outputs (data_dir)
     outputSegmentation: str = ""  # Segmentation node ID
     simvascular: bool = False  # SeqSeg -simvascular 0/1
     forceCpu: bool = False  # SeqSeg -cpu (run nnUNet inference on the CPU)
+
+
+class WeightsDownloadCancelled(Exception):
+    """The user declined the weights download, so the run stops before torch or SeqSeg."""
+
+
+class WeightsDownloadError(Exception):
+    """Raised when a pretrained-weights download or extract fails."""
 
 
 class InstallError(Exception):
@@ -290,10 +417,7 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             self.ui.addSeedButton.connect("clicked(bool)", self.onAddSeedButton)
         if hasattr(self.ui, "clearSeedsButton"):
             self.ui.clearSeedsButton.connect("clicked(bool)", self.onClearSeedsButton)
-        self.ui.downloadWeightsButton.connect("clicked(bool)", self.onDownloadWeightsButton)
-        if hasattr(self.ui, "downloadCoronaryWeightsButton"):
-            self.ui.downloadCoronaryWeightsButton.connect("clicked(bool)", self.onDownloadCoronaryWeightsButton)
-        
+
         # Output visualization buttons
         if hasattr(self.ui, 'loadSegmentationButton'):
             self.ui.loadSegmentationButton.connect("clicked(bool)", self.onLoadSegmentationButton)
@@ -306,25 +430,7 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         # ctkDirectoryButton emits directoryChanged signal when directory changes
         if hasattr(self.ui.outputDirectoryButton, 'directoryChanged'):
             self.ui.outputDirectoryButton.connect('directoryChanged(QString)', self.onOutputDirectoryChanged)
-        
-        # Connect nnUNet results path button to sync with parameter node
-        # ctkDirectoryButton uses 'directoryChanged' signal
-        if hasattr(self.ui, 'nnunetResultsPathButton'):
-            try:
-                # Try multiple signal connection approaches
-                if hasattr(self.ui.nnunetResultsPathButton, 'directoryChanged'):
-                    self.ui.nnunetResultsPathButton.directoryChanged.connect(self.onNnunetResultsPathChanged)
-                    logging.info("Connected nnUNet results path button directoryChanged signal")
-                elif hasattr(self.ui.nnunetResultsPathButton, 'currentPathChanged'):
-                    self.ui.nnunetResultsPathButton.currentPathChanged.connect(self.onNnunetResultsPathChanged)
-                    logging.info("Connected nnUNet results path button currentPathChanged signal")
-                else:
-                    logging.warning("No suitable signal found for nnUNet results path button")
-            except Exception as e:
-                logging.warning(f"Could not connect nnUNet results path button signal: {e}")
-        else:
-            logging.warning("nnunetResultsPathButton not found in UI")
-        
+
         # Connect image unit combo box to sync with parameter node
         if hasattr(self.ui, 'unitComboBox') and hasattr(self.ui.unitComboBox, 'currentTextChanged'):
             self.ui.unitComboBox.currentTextChanged.connect(self.onImageUnitChanged)
@@ -449,15 +555,7 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             firstVolumeNode = slicer.mrmlScene.GetFirstNodeByClass("vtkMRMLScalarVolumeNode")
             if firstVolumeNode:
                 self._parameterNode.inputVolume = firstVolumeNode
-        
-        # Set default nnUNet results path if not set and default weights exist
-        if not self._parameterNode.nnunetResultsPath:
-            default_weights_dir = os.path.join(os.path.expanduser("~"), "SeqSeg_Weights")
-            default_weights_path = os.path.join(default_weights_dir, "nnUNet_results")
-            if os.path.exists(default_weights_path):
-                self._parameterNode.nnunetResultsPath = default_weights_path
-                logging.info(f"Using default weights path: {default_weights_path}")
-        
+
         # Sync UI with parameter node values
         self._syncUiWithParameterNode()
         
@@ -598,16 +696,7 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         else:
             self.ui.applyButton.text = "🚀 Run SeqSeg"
             self.ui.applyButton.enabled = True
-            
-            # Check for optional improvements
-            suggestions = []
-            if not self._parameterNode.nnunetResultsPath:
-                suggestions.append("Consider downloading Aorta weights (CT/MR) or Coronary CT weights")
-            
-            if suggestions:
-                self._updateStatusMessage(f"Ready to run! Tip: {suggestions[0]}")
-            else:
-                self._updateStatusMessage("Ready for vessel segmentation — all requirements met!")
+            self._updateStatusMessage("Ready for vessel segmentation — all requirements met!")
 
     def onApplyButton(self) -> None:
         """Run processing when user clicks "Apply" button."""
@@ -616,7 +705,9 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.ui.applyButton.enabled = False
         self.ui.applyButton.text = "Processing..."
         self._updateStatusMessage("Starting SeqSeg processing...")
-        
+        weights_status = None
+        weights_error = False
+
         try:
             with slicer.util.tryWithErrorDisplay(_("Failed to compute SeqSeg results."), waitCursor=True):
                 # Get nodes from parameter node
@@ -645,32 +736,9 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             maxBranches = self._parameterNode.maxBranches
             maxStepsPerBranch = self._parameterNode.maxStepsPerBranch
             imageUnit = self._parameterNode.imageUnit
-            nnunetResultsPath = self._parameterNode.nnunetResultsPath
             nnunetType = self._parameterNode.nnunetType
             trainDataset = self._parameterNode.trainDataset
-            
-            # Debug: Log the nnUNet parameters with extra details
-            logging.info(f"nnUNet Results Path from parameter node: '{nnunetResultsPath}'")
-            logging.info(f"nnUNet Results Path length: {len(nnunetResultsPath) if nnunetResultsPath else 0}")
-            logging.info(f"nnUNet Results Path exists: {os.path.exists(nnunetResultsPath) if nnunetResultsPath else False}")
-            
-            # Fallback: Try to get nnUNet path directly from UI if parameter node is empty
-            if not nnunetResultsPath and hasattr(self.ui, 'nnunetResultsPathButton'):
-                try:
-                    if hasattr(self.ui.nnunetResultsPathButton, 'directory'):
-                        ui_path = self.ui.nnunetResultsPathButton.directory
-                    elif hasattr(self.ui.nnunetResultsPathButton, 'currentPath'):
-                        ui_path = self.ui.nnunetResultsPathButton.currentPath
-                    else:
-                        ui_path = ""
-                    
-                    if ui_path and os.path.exists(ui_path):
-                        nnunetResultsPath = ui_path
-                        self._parameterNode.nnunetResultsPath = ui_path
-                        logging.info(f"Retrieved nnUNet path from UI: '{ui_path}'")
-                except Exception as e:
-                    logging.warning(f"Could not read nnUNet path from UI: {e}")
-            
+
             # Fallback: Try to get nnUNet type directly from UI if parameter node has default/empty value
             if hasattr(self.ui, 'nnunetTypeComboBox'):
                 try:
@@ -754,6 +822,11 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             logging.info(f"nnUNet Type (final): '{nnunetType}'")
             logging.info(f"Train Dataset: '{trainDataset}'")
             logging.info(f"Nr. of Steps: {maxSteps}, Max branches: {maxBranches}, Max steps/branch: {maxStepsPerBranch}")
+
+            # Resolve weights before torch install and SeqSeg. A cancel stops here.
+            self._updateStatusMessage("Checking model weights...")
+            nnunetResultsPath = self.ensureWeightsForDataset(trainDataset)
+            logging.info(f"nnUNet Results Path: '{nnunetResultsPath}'")
             outputDirectory = self._parameterNode.outputDirectory
             logging.info(f"Output directory from parameter node: '{outputDirectory}'")
             
@@ -801,7 +874,18 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             self._updateStatusMessage(
                 _("SeqSeg finished — segmentation loaded and overlaid on the input volume in slice views.")
             )
-                
+
+        except WeightsDownloadCancelled as e:
+            logging.info("SeqSeg run cancelled: %s", e)
+            weights_status = str(e)
+        except WeightsDownloadError as e:
+            logging.error("Failed to download weights: %s", e)
+            weights_status = _("Failed to download model weights.")
+            weights_error = True
+            slicer.util.errorDisplay(
+                _("Failed to download model weights."),
+                detailedText=str(e),
+            )
         except InstallError as e:
             logging.error(f"SeqSeg dependency installation failed: {e}")
             self._updateStatusMessage(f"SeqSeg dependencies: {str(e)}", isError=True)
@@ -817,12 +901,16 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 slicer.util.errorDisplay(_("SeqSeg dependency installation failed."), detailedText=str(e))
         except Exception as e:
             logging.error(f"SeqSeg processing failed: {e}")
-            self._updateStatusMessage(f"SeqSeg failed: {str(e)}", isError=True)
-            
+            weights_status = f"SeqSeg failed: {e}"
+            weights_error = True
+
         finally:
-            # Reset button state
+            # Reset button state. _checkCanApply replaces the status line, so a
+            # weights cancel or failure is written again afterwards.
             self.ui.applyButton.enabled = True
-            self._checkCanApply()  # This will set the appropriate button text
+            self._checkCanApply()
+            if weights_status:
+                self._updateStatusMessage(weights_status, isError=weights_error)
 
     def onOutputDirectoryChanged(self, directory: str) -> None:
         """Called when output directory button changes - sync with parameter node."""
@@ -832,12 +920,6 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 directory = directory + os.sep
             self._parameterNode.outputDirectory = directory
             logging.info(f"Output directory updated to: {directory}")
-
-    def onNnunetResultsPathChanged(self, directory: str) -> None:
-        """Called when nnUNet results path button changes - sync with parameter node."""
-        if self._parameterNode and directory:
-            self._parameterNode.nnunetResultsPath = directory
-            logging.info(f"nnUNet Results Path updated to: {directory}")
 
     def onImageUnitChanged(self, unit: str) -> None:
         """Called when image unit combo box changes - sync with parameter node."""
@@ -896,32 +978,7 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         """Manually sync UI controls with parameter node values."""
         if not self._parameterNode:
             return
-        
-        # Sync nnUNet results path button (manual backup for parameter binding)
-        if hasattr(self.ui, 'nnunetResultsPathButton'):
-            try:
-                current_path = self._parameterNode.nnunetResultsPath or ""
-                
-                # Get current UI path to avoid unnecessary updates
-                ui_path = ""
-                if hasattr(self.ui.nnunetResultsPathButton, 'directory'):
-                    ui_path = self.ui.nnunetResultsPathButton.directory or ""
-                elif hasattr(self.ui.nnunetResultsPathButton, 'currentPath'):
-                    ui_path = self.ui.nnunetResultsPathButton.currentPath or ""
-                
-                # Only update if different to avoid circular updates
-                if current_path != ui_path:
-                    if hasattr(self.ui.nnunetResultsPathButton, 'setDirectory'):
-                        self.ui.nnunetResultsPathButton.setDirectory(current_path)
-                    elif hasattr(self.ui.nnunetResultsPathButton, 'directory'):
-                        self.ui.nnunetResultsPathButton.directory = current_path
-                    
-                    if current_path:
-                        logging.info(f"Synced nnUNet path to UI: {current_path}")
-                    
-            except Exception as e:
-                logging.warning(f"Could not sync nnUNet path to UI: {e}")
-        
+
         # Sync image unit combo box (backup for parameter binding)
         if hasattr(self.ui, 'unitComboBox') and self._parameterNode.imageUnit:
             try:
@@ -1387,196 +1444,126 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             })
         return pairs
 
-    def onDownloadWeightsButton(self) -> None:
-        """Download Aorta weights (CT/MR) from Zenodo."""
-        self._downloadNnunetWeightsFromZenodo(
-            zenodo_file_url="https://zenodo.org/records/15020477/files/nnUNet_results.zip?download=1",
-            zip_filename="nnUNet_results.zip",
-            extracted_dir_name="nnUNet_results",
-            progress_label="Downloading Aorta weights (CT/MR) (236.3 MB)...",
-            zenodo_record_page_url="https://zenodo.org/records/15020477",
-            weights_profile="aorta",
-        )
+    def ensureWeightsForDataset(self, dataset_id: str) -> str:
+        """Return the nnUNet results folder for this model, downloading it if needed.
 
-    def onDownloadCoronaryWeightsButton(self) -> None:
-        """Download CT coronary lumen nnUNet weights from Zenodo (Dataset010_SEQCOROASOCACT)."""
-        self._downloadNnunetWeightsFromZenodo(
-            zenodo_file_url="https://zenodo.org/records/19547894/files/nnUNet_results_coronary.zip?download=1",
-            zip_filename="nnUNet_results_coronary.zip",
-            extracted_dir_name="nnUNet_results_coronary",
-            progress_label="Downloading Coronary CT weights (~2.7 MB)...",
-            zenodo_record_page_url="https://zenodo.org/records/19547894",
-            weights_profile="coronary",
-        )
-
-    def _prompt_aorta_train_dataset(self) -> Optional[str]:
-        """Ask MR vs CT for Aorta weights. Returns real dataset id or None if cancelled."""
-        items = [
-            train_dataset_display_name("Dataset005_SEQAORTANDFEMOMR"),
-            train_dataset_display_name("Dataset006_SEQAORTANDFEMOCT"),
-        ]
-        try:
-            import qt
-            choice, ok = qt.QInputDialog.getItem(
-                slicer.util.mainWindow(),
-                "Train dataset",
-                "Select model weights for Aorta (MR or CT):",
-                items,
-                0,
-                False,
+        Missing pretrained archives are fetched into Slicer's settings directory
+        after a confirm dialog. Cancelling raises WeightsDownloadCancelled so the
+        run stops before torch is installed or SeqSeg starts. Fontan MR (003)
+        has no archive: the run continues only when a stored results folder
+        already contains that dataset directory. A download does not change the
+        model the user picked.
+        """
+        stored = ""
+        if self._parameterNode and self._parameterNode.nnunetResultsPath:
+            stored = self._parameterNode.nnunetResultsPath
+        existing = find_existing_weights(dataset_id, stored)
+        if existing:
+            self._parameterNode.nnunetResultsPath = existing
+            logging.info(
+                "Using %s weights at %s",
+                train_dataset_display_name(dataset_id),
+                existing,
             )
-        except ImportError:
-            try:
-                from PySide2.QtWidgets import QInputDialog
-                choice, ok = QInputDialog.getItem(
-                    slicer.util.mainWindow(),
-                    "Train dataset",
-                    "Select model weights for Aorta (MR or CT):",
-                    items,
-                    0,
-                    False,
-                )
-            except ImportError:
-                logging.warning("QInputDialog not available; Train Dataset not updated.")
-                return None
-        if not ok or not choice:
-            return None
-        return train_dataset_id_from_ui_value(choice)
+            return existing
 
-    def _sync_train_dataset_for_weights_profile(self, weights_profile: str, mode: str) -> str:
+        profile = weight_profile_for_dataset(dataset_id)
+        label = train_dataset_display_name(dataset_id)
+        if profile is None:
+            raise ValueError(
+                f"{label} weights are not installed, and this model has no automatic download."
+            )
+
+        accepted = slicer.util.confirmYesNoDisplay(
+            (
+                f"{label} weights are not installed.\n\n"
+                f"{profile['confirm_detail']}\n\n"
+                "Download them now? They are saved in Slicer's SeqSeg folder and used automatically."
+            ),
+            windowTitle="Download model weights",
+        )
+        if not accepted:
+            raise WeightsDownloadCancelled(f"{label} weights were not downloaded.")
+
+        extracted = self._download_weight_profile(profile)
+        # The selected dataset must be inside the archive. A parent directory
+        # alone is what used to let the wrong tree through.
+        results_path = results_dir_containing_dataset(extracted, dataset_id)
+        if not results_path:
+            raise WeightsDownloadError(
+                f"Downloaded weights at {extracted} do not contain {dataset_id}.\n\n"
+                f"You can manually download from:\n{profile['record_url']}"
+            )
+        self._parameterNode.nnunetResultsPath = results_path
+        return results_path
+
+    def _download_weight_profile(self, profile: dict) -> str:
+        """Download one Zenodo archive into Slicer's SeqSeg weights folder.
+
+        The caller has already confirmed. There is no directory dialog: the
+        archive unpacks beside Slicer's user settings, and SeqSeg is pointed
+        at the extracted tree.
         """
-        Align Train Dataset with downloaded or selected weights.
-
-        :param weights_profile: 'aorta' or 'coronary'
-        :param mode: 'fresh_download' (may prompt for Aorta MR vs CT) or 'use_existing'
-        :return: Human-readable suffix for status dialogs (may be empty).
-        """
-        if weights_profile == "coronary":
-            self._parameterNode.trainDataset = "Dataset010_SEQCOROASOCACT"
-            label = train_dataset_display_name("Dataset010_SEQCOROASOCACT")
-            return f"\n\nModel weights set to {label}."
-        if weights_profile == "aorta" and mode == "fresh_download":
-            chosen = self._prompt_aorta_train_dataset()
-            if chosen:
-                self._parameterNode.trainDataset = chosen
-                label = train_dataset_display_name(chosen)
-                return f"\n\nModel weights set to {label}."
-            return "\n\nModel weights unchanged (MR/CT selection cancelled)."
-        return ""
-
-    def _downloadNnunetWeightsFromZenodo(
-        self,
-        zenodo_file_url,
-        zip_filename,
-        extracted_dir_name,
-        progress_label,
-        zenodo_record_page_url,
-        weights_profile,
-    ) -> None:
-        """Download a nnUNet results archive from Zenodo, extract it, and set nnUNet results path."""
+        import urllib.request
         import zipfile
 
-        default_weights_dir = os.path.join(os.path.expanduser("~"), "SeqSeg_Weights")
-
+        download_dir = managed_weights_root()
+        os.makedirs(download_dir, exist_ok=True)
+        weights_path = os.path.join(download_dir, profile["extracted_dir_name"])
+        zip_file = os.path.join(download_dir, profile["zip_filename"])
+        # Aorta and coronary archives put dataset folders at the top of the zip,
+        # so they unpack into the weights folder. Requiring a child named
+        # nnUNet_results made that successful extract look like a failure.
+        # Fontan MR (orig) is unpacked into its own results folder.
+        extract_target = weights_path if profile.get("extract_into_results_dir") else download_dir
+        if profile.get("extract_into_results_dir"):
+            os.makedirs(weights_path, exist_ok=True)
+        progressBar = None
         try:
-            with slicer.util.tryWithErrorDisplay(_("Failed to download model weights."), waitCursor=True):
-                download_dir = None
-                try:
-                    import qt
-                    download_dir = qt.QFileDialog.getExistingDirectory(
-                        None,
-                        "Select directory to download model weights",
-                        default_weights_dir
-                    )
-                except ImportError:
-                    try:
-                        from PySide2.QtWidgets import QFileDialog
-                        download_dir = QFileDialog.getExistingDirectory(
-                            None,
-                            "Select directory to download model weights",
-                            default_weights_dir
-                        )
-                    except ImportError:
-                        logging.warning("Could not open directory dialog, using default directory")
-                        download_dir = default_weights_dir
-                if not download_dir:
-                    return
+            progressBar = slicer.util.createProgressDialog(
+                labelText=profile["progress_label"],
+                maximum=0,
+                windowTitle="Downloading Weights",
+            )
+            slicer.app.processEvents()
+            logging.info("Downloading weights from %s to %s", profile["url"], zip_file)
 
-                os.makedirs(download_dir, exist_ok=True)
+            def show_progress(block_num, block_size, total_size):
+                if total_size > 0:
+                    percent = min(100, (block_num * block_size * 100) // total_size)
+                    progressBar.setValue(percent)
+                    progressBar.setLabelText(f"Downloading... {percent}%")
+                    slicer.app.processEvents()
 
-                weights_path = os.path.join(download_dir, extracted_dir_name)
-                if os.path.exists(weights_path):
-                    response = slicer.util.confirmYesNoDisplay(
-                        f"Weights already exist at:\n{weights_path}\n\nDo you want to download again?",
-                        windowTitle="Weights Already Exist"
-                    )
-                    if not response:
-                        self._parameterNode.nnunetResultsPath = weights_path
-                        train_note = ""
-                        if weights_profile == "coronary":
-                            train_note = self._sync_train_dataset_for_weights_profile(
-                                weights_profile, mode="use_existing"
-                            )
-                            self._syncUiWithParameterNode()
-                        slicer.util.infoDisplay(
-                            f"Using existing weights at:\n{weights_path}{train_note}"
-                        )
-                        return
+            urllib.request.urlretrieve(profile["url"], zip_file, show_progress)
 
-                progressBar = slicer.util.createProgressDialog(
-                    labelText=progress_label,
-                    maximum=0,
-                    windowTitle="Downloading Weights"
-                )
-                slicer.app.processEvents()
-
-                import urllib.request
-                zip_file = os.path.join(download_dir, zip_filename)
-
-                logging.info(f"Downloading weights from {zenodo_file_url} to {zip_file}")
-
-                def show_progress(block_num, block_size, total_size):
-                    if total_size > 0:
-                        percent = min(100, (block_num * block_size * 100) // total_size)
-                        progressBar.setValue(percent)
-                        progressBar.setLabelText(f"Downloading... {percent}%")
-                        slicer.app.processEvents()
-
-                urllib.request.urlretrieve(zenodo_file_url, zip_file, show_progress)
-
-                progressBar.setLabelText("Extracting weights...")
-                slicer.app.processEvents()
-
-                logging.info(f"Extracting {zip_file} to {download_dir}")
-                with zipfile.ZipFile(zip_file, 'r') as zip_ref:
-                    zip_ref.extractall(download_dir)
-
-                os.remove(zip_file)
-
-                if os.path.exists(weights_path):
-                    self._parameterNode.nnunetResultsPath = weights_path
-                    train_note = self._sync_train_dataset_for_weights_profile(
-                        weights_profile, mode="fresh_download"
-                    )
-                    self._syncUiWithParameterNode()
-                    slicer.util.infoDisplay(
-                        f"Successfully downloaded and extracted model weights to:\n{weights_path}\n\n"
-                        f"The nnUNet Results Path has been updated automatically.{train_note}",
-                        windowTitle="Download Complete"
-                    )
-                    logging.info(f"Successfully downloaded weights to {weights_path}")
-                else:
-                    raise RuntimeError(f"Extraction failed: {weights_path} not found")
-
+            progressBar.setLabelText("Extracting weights...")
+            slicer.app.processEvents()
+            logging.info("Extracting %s to %s", zip_file, extract_target)
+            with zipfile.ZipFile(zip_file, "r") as zip_ref:
+                zip_ref.extractall(extract_target)
+        except Exception as e:
+            raise WeightsDownloadError(
+                f"Failed to download model weights:\n{e}\n\n"
+                f"You can manually download from:\n{profile['record_url']}"
+            ) from e
+        finally:
+            if progressBar is not None:
                 progressBar.close()
 
-        except Exception as e:
-            logging.error(f"Failed to download weights: {e}")
-            slicer.util.errorDisplay(
-                f"Failed to download model weights:\n{str(e)}\n\n"
-                f"You can manually download from:\n{zenodo_record_page_url}",
-                windowTitle="Download Failed"
+        if os.path.exists(zip_file):
+            try:
+                os.remove(zip_file)
+            except OSError as e:
+                logging.warning("Could not remove weights archive %s: %s", zip_file, e)
+
+        if not os.path.isdir(extract_target):
+            raise WeightsDownloadError(
+                f"Extraction failed: {extract_target} not found.\n\n"
+                f"You can manually download from:\n{profile['record_url']}"
             )
+        logging.info("Downloaded weights to %s", extract_target)
+        return extract_target
 
     def onLoadSegmentationButton(self) -> None:
         """Load the latest segmentation (.mha) file from output directory."""

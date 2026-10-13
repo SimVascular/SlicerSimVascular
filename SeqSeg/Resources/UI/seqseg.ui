@@ -293,68 +293,13 @@
      </property>
      <layout class="QFormLayout" name="formLayout_nnunet">
       <item row="0" column="0">
-       <widget class="QLabel" name="nnunetResultsPathLabel">
-        <property name="text">
-         <string>nnUNet Results Path:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="0" column="1">
-       <layout class="QHBoxLayout" name="nnunetPathLayout">
-        <item>
-         <widget class="ctkDirectoryButton" name="nnunetResultsPathButton">
-          <property name="toolTip">
-           <string>Path to nnUNet results folder</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item row="1" column="0">
-       <widget class="QLabel" name="nnunetDownloadLabel">
-        <property name="text">
-         <string>Pretrained models:</string>
-        </property>
-        <property name="toolTip">
-         <string>No training or command line required: click a button below. Slicer asks where to save; the extension downloads pretrained weights, unpacks them, and can set nnUNet Results Path for you.</string>
-        </property>
-       </widget>
-      </item>
-      <item row="1" column="1">
-       <layout class="QVBoxLayout" name="nnunetDownloadsLayout">
-        <property name="spacing">
-         <number>4</number>
-        </property>
-        <item>
-         <widget class="QPushButton" name="downloadWeightsButton">
-          <property name="text">
-           <string>Download Aorta Weights</string>
-          </property>
-          <property name="toolTip">
-           <string>One-click download: aorta weights (CT/MR) from Zenodo (236.3 MB). Choose a parent folder when asked; extracts to nnUNet_results and updates nnUNet Results Path when possible.</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QPushButton" name="downloadCoronaryWeightsButton">
-          <property name="text">
-           <string>Download Coronary Weights</string>
-          </property>
-          <property name="toolTip">
-           <string>One-click download: coronary CTA lumen weights from Zenodo (~2.7 MB). Choose a parent folder when asked; extracts to nnUNet_results_coronary; Model Weights can be set to Coronary CT.</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item row="2" column="0">
        <widget class="QLabel" name="nnunetTypeLabel">
         <property name="text">
          <string>nnUNet Type:</string>
         </property>
        </widget>
       </item>
-      <item row="2" column="1">
+      <item row="0" column="1">
        <widget class="QComboBox" name="nnunetTypeComboBox">
         <property name="toolTip">
          <string>Type of nnUNet model to use</string>
@@ -374,17 +319,17 @@
         </item>
        </widget>
       </item>
-      <item row="3" column="0">
+      <item row="1" column="0">
        <widget class="QLabel" name="trainDatasetLabel">
         <property name="text">
          <string>Model Weights:</string>
         </property>
        </widget>
       </item>
-      <item row="3" column="1">
+      <item row="1" column="1">
        <widget class="QComboBox" name="trainDatasetComboBox">
         <property name="toolTip">
-         <string>Pretrained model to use (must match the weights under nnUNet Results Path). Aorta MR/CT were trained in cm units; Coronary CT was trained in mm. Match Image Unit (under Inputs) and Scale (below) accordingly. The real nnUNet dataset id is applied automatically when running SeqSeg.</string>
+         <string>Pretrained model to use. If its weights are not already in Slicer's SeqSeg folder, Run SeqSeg asks to download them and then uses that folder. Aorta MR, Aorta CT, and Fontan MR (orig) were trained in cm; Coronary CT was trained in mm. Fontan MR (003) has no automatic download. Match Image Unit (under Inputs) and Scale (below) accordingly. The real nnUNet dataset id is applied automatically when running SeqSeg.</string>
         </property>
         <property name="sizeAdjustPolicy">
          <enum>QComboBox::AdjustToMinimumContentsLengthWithIcon</enum>
@@ -412,10 +357,10 @@
         </item>
        </widget>
       </item>
-      <item row="4" column="0" colspan="2">
+      <item row="2" column="0" colspan="2">
        <widget class="QLabel" name="trainDatasetUnitsHintLabel">
         <property name="text">
-         <string>Aorta MR and Aorta CT were trained on cm-scale data; Coronary CT was trained on mm-scale data. Set Image Unit under Inputs and Scale below to match your volume and the model.</string>
+         <string>Aorta MR, Aorta CT, and Fontan MR (orig) were trained on cm-scale data; Coronary CT was trained on mm-scale data. Set Image Unit under Inputs and Scale below to match your volume and the model.</string>
         </property>
         <property name="wordWrap">
          <bool>true</bool>
@@ -431,14 +376,14 @@
         </property>
        </widget>
       </item>
-      <item row="5" column="0">
+      <item row="3" column="0">
        <widget class="QLabel" name="scaleLabel">
         <property name="text">
          <string>Scale:</string>
         </property>
        </widget>
       </item>
-      <item row="5" column="1">
+      <item row="3" column="1">
        <widget class="QComboBox" name="scaleComboBox">
         <property name="toolTip">
          <string>Relates nnUNet training voxel units to your Image Unit. Use 10 if the model was trained in mm and your volume is in cm; use 0.1 if the model was trained in cm and your volume is in mm; use 1 when training units match the image (default).</string>
@@ -466,7 +411,7 @@
         </item>
        </widget>
       </item>
-      <item row="6" column="0" colspan="2">
+      <item row="4" column="0" colspan="2">
        <widget class="QLabel" name="scaleExplanationLabel">
         <property name="text">
          <string>Scale matches nnUNet training units to Image Unit: if the model was trained in mm and the image is in cm, choose 10; if the model was trained in cm and the image is in mm, choose 0.1; if units match, choose 1 (default).</string>
@@ -485,14 +430,14 @@
         </property>
        </widget>
       </item>
-      <item row="7" column="0">
+      <item row="5" column="0">
        <widget class="QLabel" name="forceCpuLabel">
         <property name="text">
          <string>Device:</string>
         </property>
        </widget>
       </item>
-      <item row="7" column="1">
+      <item row="5" column="1">
        <widget class="QCheckBox" name="forceCpuCheckBox">
         <property name="toolTip">
          <string>If checked, nnUNet inference runs on the CPU (adds -cpu to the SeqSeg command). Use this when there is no usable GPU, or when GPU runs fail with a CUDA error; inference is slower on the CPU.</string>
@@ -705,9 +650,9 @@ QPushButton:disabled {
    <item>
     <widget class="QLabel" name="instructionsLabel">
      <property name="text">
-      <string>Quick start: load a volume, click Add Seed and place a 2-point line (start then direction; radius is the line length), optionally add more seeds, open nnUNet Configuration and click Download Aorta or Download Coronary CT Weights if you need models (buttons fetch and unpack weights—no manual training), set output folder, Run SeqSeg (vessel segmentation). Then use Load Segmentation / Load Surface Mesh / Browse All Output Files.
+      <string>Quick start: load a volume, click Add Seed and place a 2-point line (start then direction; radius is the line length), optionally add more seeds, choose Model Weights under nnUNet Configuration, set the output folder, and Run SeqSeg. If those weights are not installed, Slicer asks to download them into its SeqSeg folder and then runs. Then use Load Segmentation / Load Surface Mesh / Browse All Output Files.
 
-Details: NIfTI is recommended. Image unit (mm/cm) must match your volume. After the download buttons finish, confirm Model Weights (Aorta MR/CT is prompted; Coronary uses Coronary CT). First run may install dependencies and take longer. Results live under output_directory/output/.</string>
+Details: NIfTI is recommended. Image unit (mm/cm) must match your volume and the model (Aorta MR/CT and Fontan MR (orig) were trained in cm; Coronary CT in mm). First run may install dependencies and take longer. Results live under output_directory/output/.</string>
      </property>
      <property name="wordWrap">
       <bool>true</bool>
