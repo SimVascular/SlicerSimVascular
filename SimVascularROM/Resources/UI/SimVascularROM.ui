@@ -1,0 +1,409 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SimVascularROM</class>
+ <widget class="qMRMLWidget" name="SimVascularROM">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>460</width>
+    <height>1100</height>
+   </rect>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="ctkCollapsibleButton" name="inputCollapsibleButton">
+     <property name="text">
+      <string>Mesh</string>
+     </property>
+     <layout class="QFormLayout" name="inputFormLayout">
+      <item row="0" column="0">
+       <widget class="QLabel" name="inputMeshLabel">
+        <property name="text">
+         <string>Labelled mesh:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="qMRMLNodeComboBox" name="inputMeshSelector">
+        <property name="toolTip">
+         <string>The mesh to simulate, its faces named in SimVascular Mesh Prep: the volume mesh CFD Mesh Generator made, or a labelled surface, since a 0D model needs only the surface. The face names become the boundary condition names, and what the results come back labelled with.</string>
+        </property>
+        <property name="nodeTypes">
+         <stringlist notr="true">
+          <string>vtkMRMLModelNode</string>
+         </stringlist>
+        </property>
+        <property name="noneEnabled">
+         <bool>true</bool>
+        </property>
+        <property name="addEnabled">
+         <bool>false</bool>
+        </property>
+        <property name="removeEnabled">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0" colspan="2">
+       <widget class="QLabel" name="meshStatusLabel">
+        <property name="text">
+         <string/>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QPushButton" name="openMeshPrepButton">
+        <property name="text">
+         <string>Name the faces in SimVascular Mesh Prep</string>
+        </property>
+        <property name="toolTip">
+         <string>Open this mesh in SimVascular Mesh Prep, where its faces are named. A mesh out of Clip Vessel arrives named after its clip points; opening it there is enough to save those names on it.</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="boundaryCollapsibleButton">
+     <property name="text">
+      <string>Boundary conditions</string>
+     </property>
+     <layout class="QVBoxLayout" name="boundaryVerticalLayout">
+      <item>
+       <widget class="QLabel" name="boundaryHelpLabel">
+        <property name="text">
+         <string>One condition per cap: an inflow for the inlets, and RCR or resistance BCs for the outlets.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QTableWidget" name="facesTable">
+        <property name="toolTip">
+         <string>One row per cap. Selecting a row shows that cap in the 3D view and, once there are results, plots it. Choose the kind of condition, then double-click its values to type them in the order the hint below says. An inflow's waveform is loaded by double-clicking its values, which asks for a .flow file; a steady inflow is typed by selecting the cell and typing the flow. Values are cgs: flow mL/s, resistance dyn·s/cm⁵, compliance cm⁵/dyn, pressure dyn/cm² (1 mmHg = 1333.22).</string>
+        </property>
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>240</height>
+         </size>
+        </property>
+        <property name="selectionBehavior">
+         <enum>QAbstractItemView::SelectRows</enum>
+        </property>
+        <property name="selectionMode">
+         <enum>QAbstractItemView::ExtendedSelection</enum>
+        </property>
+        <property name="alternatingRowColors">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="valuesHintLabel">
+        <property name="text">
+         <string/>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="centerlinesCollapsibleButton">
+     <property name="text">
+      <string>Centerlines</string>
+     </property>
+     <layout class="QVBoxLayout" name="centerlinesVerticalLayout">
+      <item>
+       <layout class="QFormLayout" name="inletFormLayout">
+        <item row="0" column="0">
+         <widget class="QLabel" name="inletLabel">
+          <property name="text">
+           <string>Source:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="0" column="1">
+         <widget class="QComboBox" name="inletComboBox">
+          <property name="toolTip">
+           <string>The source: the cap the centerlines are traced from, which takes an inflow. Usually the largest inflow; on a Fontan, either vena cava will do, and the other inflows are prescribed at their own ends.</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QPushButton" name="computeCenterlinesButton">
+        <property name="text">
+         <string>Compute centerlines</string>
+        </property>
+        <property name="toolTip">
+         <string>Trace centerlines from the source to every other cap with SlicerVMTK, and split them into branches. Each branch becomes a chain of vessels in the 0D model. Running the simulation does this too when the centerlines are not current; doing it first is how to check them.</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="centerlinesStatusLabel">
+        <property name="text">
+         <string/>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="simulationCollapsibleButton">
+     <property name="text">
+      <string>Simulation</string>
+     </property>
+     <layout class="QFormLayout" name="simulationFormLayout">
+      <item row="0" column="0">
+       <widget class="QLabel" name="caseDirectoryLabel">
+        <property name="text">
+         <string>Output folder:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="ctkPathLineEdit" name="caseDirectoryPathLineEdit">
+        <property name="toolTip">
+         <string>Where the case is written: the faces, the centerlines, SimVascular's boundary condition files, svZeroDSolver's input and its results. Created if it does not exist.</string>
+        </property>
+        <property name="filters">
+         <set>ctkPathLineEdit::Dirs|ctkPathLineEdit::Writable</set>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="densityLabel">
+        <property name="text">
+         <string>Blood density:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QDoubleSpinBox" name="densitySpinBox">
+        <property name="toolTip">
+         <string>Density in g/cm³, as the solver takes it in cgs. 1.06 is blood's.</string>
+        </property>
+        <property name="decimals">
+         <number>4</number>
+        </property>
+        <property name="minimum">
+         <double>0.0001</double>
+        </property>
+        <property name="maximum">
+         <double>100.0</double>
+        </property>
+        <property name="singleStep">
+         <double>0.01</double>
+        </property>
+        <property name="value">
+         <double>1.06</double>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="viscosityLabel">
+        <property name="text">
+         <string>Blood viscosity:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QDoubleSpinBox" name="viscositySpinBox">
+        <property name="toolTip">
+         <string>Dynamic viscosity in poise, g/(cm·s), as the solver takes it in cgs. 0.04 is blood's.</string>
+        </property>
+        <property name="decimals">
+         <number>4</number>
+        </property>
+        <property name="minimum">
+         <double>0.0001</double>
+        </property>
+        <property name="maximum">
+         <double>100.0</double>
+        </property>
+        <property name="singleStep">
+         <double>0.001</double>
+        </property>
+        <property name="value">
+         <double>0.04</double>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="cyclesLabel">
+        <property name="text">
+         <string>Cardiac cycles:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QSpinBox" name="cyclesSpinBox">
+        <property name="toolTip">
+         <string>How many cycles to run. Only the last is reported, so the ones before it are what the compliances settle in: a few for resistances, more for RCRs with long time constants.</string>
+        </property>
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>1000</number>
+        </property>
+        <property name="value">
+         <number>5</number>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0">
+       <widget class="QLabel" name="pointsLabel">
+        <property name="text">
+         <string>Time points per cycle:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="1">
+       <widget class="QSpinBox" name="pointsSpinBox">
+        <property name="minimum">
+         <number>2</number>
+        </property>
+        <property name="maximum">
+         <number>100000</number>
+        </property>
+        <property name="value">
+         <number>200</number>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="0" colspan="2">
+       <widget class="QPushButton" name="createSolverFilesButton">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="text">
+         <string>Create solver files</string>
+        </property>
+       </widget>
+      </item>
+      <item row="6" column="0" colspan="2">
+       <widget class="QPushButton" name="runButton">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="text">
+         <string>Run simulation</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="resultsCollapsibleButton">
+     <property name="text">
+      <string>Results</string>
+     </property>
+     <layout class="QVBoxLayout" name="resultsVerticalLayout">
+      <item>
+       <widget class="QPushButton" name="exportButton">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="text">
+         <string>Export results</string>
+        </property>
+        <property name="toolTip">
+         <string>Write every cap's flow and pressure over the last cycle to a CSV file: a time column, then a flow and a pressure column per cap, in mL/s and mmHg. Flow is positive the way the cap's condition drives it, into the model at an inflow and out of it at an outlet.</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="networkButton">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="text">
+         <string>Show network</string>
+        </property>
+        <property name="toolTip">
+         <string>Draw the 0D network as a directed graph beside the views: every vessel segment, junction and boundary condition, coloured by mean pressure. Click a block for its values and results; a vessel is plotted and picked out on the centerlines, a cap is selected in the table.</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="statusLabel">
+     <property name="text">
+      <string/>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>ctkCollapsibleButton</class>
+   <extends>QWidget</extends>
+   <header>ctkCollapsibleButton.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>ctkPathLineEdit</class>
+   <extends>QWidget</extends>
+   <header>ctkPathLineEdit.h</header>
+  </customwidget>
+  <customwidget>
+   <class>qMRMLNodeComboBox</class>
+   <extends>QWidget</extends>
+   <header>qMRMLNodeComboBox.h</header>
+  </customwidget>
+  <customwidget>
+   <class>qMRMLWidget</class>
+   <extends>QWidget</extends>
+   <header>qMRMLWidget.h</header>
+   <container>1</container>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections>
+  <connection>
+   <sender>SimVascularROM</sender>
+   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+   <receiver>inputMeshSelector</receiver>
+   <slot>setMRMLScene(vtkMRMLScene*)</slot>
+  </connection>
+ </connections>
+</ui>

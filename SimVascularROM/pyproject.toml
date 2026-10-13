@@ -1,0 +1,39 @@
+# `svromsetup` is installed into Slicer by this module's CMakeLists, and pip-installed only for use
+# outside Slicer -- a headless test run, or a workflow setting cases up from a terminal. Under
+# Slicer the module's own directory is already on `sys.path`.
+
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "svromsetup"
+version = "0.1.0"
+description = "Set up, run and read back a 0D svZeroDSolver simulation of a face-labelled vascular model"
+requires-python = ">=3.9"
+license = "BSD-3-Clause"
+license-files = ["LICENSE.txt"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+# Pinned to nothing, as svmeshcomplete is: Slicer ships numpy and VTK, and pinning here would
+# fight whatever the host has. svmeshcomplete is beside SimVascular Mesh Prep in this repository.
+dependencies = ["numpy", "vtk", "svmeshcomplete"]
+
+[project.optional-dependencies]
+# What the centerlines, the solver input and the solve need. Not hard dependencies: svromutils
+# brings VMTK, and pip's VMTK pins a VTK of its own, which must not be installed over Slicer's --
+# under Slicer the panel installs both itself, svromutils without its dependencies.
+rom = ["svromutils", "svzerod"]
+
+[project.urls]
+Homepage = "https://github.com/SimVascular/SlicerSimVascular"
+
+[tool.setuptools.packages.find]
+include = ["svromsetup*"]
+
+[tool.pytest.ini_options]
+testpaths = ["Testing/Python"]

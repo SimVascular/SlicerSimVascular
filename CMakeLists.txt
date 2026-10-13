@@ -24,6 +24,8 @@ add_subdirectory(PaintModel)
 add_subdirectory(FaceAwareRemesh)
 add_subdirectory(SimVascularMeshPrep)
 add_subdirectory(SeqSeg)
+add_subdirectory(SimVascularROM)
+add_subdirectory(SimVascularMultiPhysics)
 ## NEXT_MODULE
 
 #-----------------------------------------------------------------------------
