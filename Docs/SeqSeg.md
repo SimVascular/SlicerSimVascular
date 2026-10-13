@@ -18,28 +18,26 @@ Sveinsson Cepero, N., Shadden, S.C. SeqSeg: Learning Local Segments for Automati
 
 ## Prerequisites
 
-### Slicer extensions (required before Python inference works)
+### PyTorch and nnUNet
 
-Install these from **View → Extension Manager** (search by name and install):
+**Run SeqSeg** installs **`torch` 2.2.2**, **`torchvision` 0.17.2**, and **`nnunetv2`** (at least **2.5.1**; at least **2.7.0** on macOS) when they are missing. It asks first. The download needs a network connection and can take several minutes. If NumPy is 2.x, it is downgraded to 1.x (torch 2.2.2 cannot import against NumPy 2) and the other packages are installed in that same run, held to NumPy 1 by a pip constraint. Slicer then asks for one restart so the process loads NumPy 1. The next Run does not downgrade NumPy again.
 
-- **[PyTorch](https://slicer.readthedocs.io/en/latest/user_guide/extensions_manager.html)** (catalog name usually **PyTorch**): supplies **`PyTorchUtils`**, used to install a compatible **`torch`** / **`torchvision`** build into Slicer’s Python.
-- **NNUNet** (catalog name usually **NNUNet**; Python module **`SlicerNNUNetLib`**): supplies **`nnunetv2`** installation and version checks aligned with other nnUNet-based Slicer extensions.
+Two installers are used, in this order:
 
-Install **PyTorch** and **NNUNet** manually from the Extension Manager before running SeqSeg. If Slicer prompts for a restart after installing either extension, restart Slicer before opening **SeqSeg Vessel Segmentation**.
+1. If the **PyTorch** and **NNUNet** extensions are already installed, SeqSeg uses them (`PyTorchUtils` and `SlicerNNUNetLib`). That is the same path as other nnUNet modules in Slicer, and it picks a CUDA wheel from the installed NVIDIA driver.
+2. If those extensions are not installed, SeqSeg installs the same versions itself. Torch goes through [light-the-torch](https://github.com/Slicer/light-the-torch), which is what the PyTorch extension uses, because a plain `pip install torch` often fetches a wheel with no kernels for the GPU in the machine. nnU-Net then reports that failure as an out-of-memory error. **`nnunetv2`** is installed with its dependencies except the packages Slicer already provides (**SimpleITK**, **torch**, **torchvision**, **numpy**, **requests**).
 
-Without both extensions loaded, **Run SeqSeg** stops with an error until they are installed (then restart Slicer if prompted).
-
-The SimVascular extension does **not** declare **PyTorch** and **NNUNet** in `EXTENSION_DEPENDS`. SeqSeg is the only module here that needs them, and declaring them would make the Extension Manager install PyTorch for every SimVascular user, including those who only use the meshing modules. The scripted module does not list them as hard Qt module dependencies either (same idea as Total Segmentator): otherwise Slicer would refuse to open SeqSeg until PyTorch loads, and you would not get the in-module dependency checks.
+The extensions are optional. The SimVascular extension does **not** declare **PyTorch** and **NNUNet** in `EXTENSION_DEPENDS`. SeqSeg is the only module here that needs them, and declaring them would make the Extension Manager install PyTorch for every SimVascular user, including those who only use the meshing modules. The scripted module does not list them as hard Qt module dependencies either (same idea as Total Segmentator): otherwise Slicer would refuse to open SeqSeg until PyTorch loads, and you would not get the in-module install.
 
 ### First-time Python setup
 
-The **SeqSeg Vessel Segmentation** module does **not** ship PyTorch or nnUNet wheels inside its own installer. Before running SeqSeg:
+The **SeqSeg Vessel Segmentation** module does **not** ship PyTorch or nnUNet wheels inside its own installer. On first **Run SeqSeg** (network required):
 
-1. Install **PyTorch** from Slicer Extensions and use it to provide **`torch` 2.2.2** / **`torchvision` 0.17.2** in Slicer’s Python. **`torch` must be pinned to `==2.2.2`** (with the matching **`torchvision==0.17.2`**)—other versions are not supported. In the **PyTorch Util** module set the requested version to **`2.2.2`** before installing, or install manually with **`torch==2.2.2`**.
-2. Install **NNUNet** from Slicer Extensions and use it to provide **`nnunetv2` 2.5.1** in Slicer’s Python.
-3. On first **Run SeqSeg**, the module may ask you to confirm installation of extra Python packages (network required). It installs the **`seqseg`** PyPI package (**`seqseg>=2.1.1`**, the latest release on PyPI) using **`slicer.util.pip_install`**, first with **`--no-deps`**, then installs declared dependencies selectively—**skipping** packages that must stay under Slicer’s control (**SimpleITK**, **torch**, **torchvision**, **nnunetv2**, **requests**, **rt_utils**), same pattern as extensions such as **Total Segmentator**. Later runs check PyPI and upgrade **`seqseg`** if a newer version is published.
+1. If **`torch`** is not **2.2.2** (with **`torchvision` 0.17.2**), it is installed. Other torch versions are not supported.
+2. If **`nnunetv2`** is older than **2.5.1** (or missing), it is installed. On macOS the floor is **2.7.0**, because older nnunetv2 does not run under Rosetta.
+3. The **`seqseg`** PyPI package (**`seqseg>=2.1.1`**, the latest release on PyPI) is installed using **`slicer.util.pip_install`**, first with **`--no-deps`**, then its declared dependencies are installed selectively—**skipping** packages that must stay under Slicer’s control (**SimpleITK**, **torch**, **torchvision**, **nnunetv2**, **numpy**, **requests**, **rt_utils**), same pattern as extensions such as **Total Segmentator**. Later runs check PyPI and upgrade **`seqseg`** if a newer version is published.
 
-You may need to **restart Slicer** once after PyTorch or other packages are installed; follow any prompt the module shows.
+You may need to **restart Slicer** once after PyTorch or NumPy is changed; follow any prompt the module shows.
 
 ### Neural network weights (pretrained models)
 
@@ -53,7 +51,7 @@ Use **Slicer’s** Python interpreter, not your system `python`. Example (adjust
 /path/to/Slicer-X.Y.Z/bin/PythonSlicer -m pip install --upgrade "seqseg>=2.1.1"
 ```
 
-You still need the **PyTorch** and **Slicer NNUNet** extensions and their installers to provide **`torch`** and **`nnunetv2`** consistently.
+**Run SeqSeg** installs **`torch`** and **`nnunetv2`** when they are missing, including when the PyTorch and NNUNet extensions are not installed. The command above only installs the **`seqseg`** package.
 
 ## Tutorial sample data
 
@@ -106,7 +104,7 @@ Other fields in the screenshot (e.g. **Train Dataset** `Dataset006_SEQAORTANDFEM
    - For **CTA-cardio** and **CT aorta**, follow [Placing seed points on CTA-cardio (CT aorta)](#placing-seed-points-on-cta-cardio-ct-aorta) for where to put each seed.
 
 3. **Finish settings and run SeqSeg** (in **SeqSeg Vessel Segmentation**, which you already opened for seeds):
-   - Ensure **PyTorch** and **Slicer NNUNet** are installed from the Extension Manager ([Prerequisites](#prerequisites)).
+   - On the first run, confirm the package install if Slicer asks ([Prerequisites](#prerequisites)). **torch 2.2.2** and **nnunetv2** are installed then, whether or not the PyTorch and NNUNet extensions are present.
    - Confirm **Input Volume** and both **Seed Point** markups match what you set up above (open the module from the module menu under SimVascular or Segmentation if you closed it—you can search for *vessel*, *segmentation*, or *SeqSeg*).
    - Set the radius estimate (approximate size of the structure you want to segment)
    - For **CTA-cardio** + **CT aorta**, set **Image Unit** to **mm**, **Scale** to **0.1**, and consider **nnUNet Type** **2d** as in [Tutorial module settings (CTA-cardio, CT aorta)](#tutorial-module-settings-cta-cardio-ct-aorta)
@@ -197,23 +195,23 @@ The extension follows the [SeqSeg CLI interface](https://github.com/numisveinsso
 
 ## Troubleshooting
 
-- **PyTorch / Slicer NNUNet missing**: Install both from **Extension Manager**, restart Slicer if prompted, then open **SeqSeg Vessel Segmentation** again.
-- **Dependency installation cancelled or failed**: Check the **Python Interactor** log for `pip` output. Confirm network access. Use the **PyTorch Util** module to fix **`torch`** versions if the error mentions an incompatible PyTorch build; use the **nnUNet** module from **Slicer NNUNet** if **`nnunetv2`** is missing or too old.
+- **PyTorch / nnUNet install failed**: Check the **Python Interactor** log for `pip` output and confirm network access. **Run SeqSeg** installs **`torch` 2.2.2** and **`nnunetv2`** itself when the PyTorch and NNUNet extensions are not installed. If those extensions are installed, the **PyTorch Util** and **nnUNet** modules can install the same versions.
+- **Dependency installation cancelled or failed**: Check the **Python Interactor** log for `pip` output. Confirm network access. A cancelled confirm dialog leaves the packages uninstalled; run SeqSeg again and accept the install.
 - **Restart requested after install**: Complete any dependency dialog; restart Slicer when the module asks so newly installed packages load cleanly.
-- **"SeqSeg dependency installation failed"** or **`seqseg`** still missing**: Install **`seqseg>=2.1.1`** with **`PythonSlicer -m pip`** ([Manual / advanced installation](#manual--advanced-installation)) after **`torch`** and **`nnunetv2`** are working via the extensions.
+- **"SeqSeg dependency installation failed"** or **`seqseg`** still missing**: Install **`seqseg>=2.1.1`** with **`PythonSlicer -m pip`** ([Manual / advanced installation](#manual--advanced-installation)) after **`torch`** and **`nnunetv2`** import.
 - **"Seed point is not defined"**: Make sure both markups nodes contain at least one fiducial point.
 - **"SeqSeg execution failed"**: If you have not downloaded weights yet, use **Download Aorta Weights (CT/MR)** or **Download Coronary CT Weights** in the module first; otherwise confirm **nnUNet Results Path** points at the folder that contains the unpacked `nnUNet_results` tree and that the **Train Dataset** dropdown matches the model you installed.
 - **"No output segmentation file found"**: SeqSeg may have failed silently—check the Slicer console for detailed error messages.
-- **"no kernel image is available for execution on the device"**: The installed **`torch`** build has no CUDA kernels for your GPU architecture, so nnU-Net inference cannot run there. nnU-Net reports this as a memory problem, but it is not. The module detects it, reruns SeqSeg with **`-cpu`**, and fails the run if tracking still segments nothing (for example a `_0_steps` output file). Check **Force CPU (no GPU)** under **nnUNet Configuration** to skip the failing GPU attempt altogether, or install a PyTorch build matching your GPU in the **PyTorch Util** module to use the GPU.
+- **"no kernel image is available for execution on the device"**: The installed **`torch`** build has no CUDA kernels for your GPU architecture, so nnU-Net inference cannot run there. nnU-Net reports this as a memory problem, but it is not. The module detects it, reruns SeqSeg with **`-cpu`**, and fails the run if tracking still segments nothing (for example a `_0_steps` output file). Check **Force CPU (no GPU)** under **nnUNet Configuration** to skip the failing GPU attempt altogether. The first-run install asks light-the-torch for a wheel that matches the NVIDIA driver; if that wheel still cannot run on this GPU, install a matching build (the **PyTorch Util** module can do that when the PyTorch extension is installed).
 - **Segmentation appears in wrong location**: Check that your volume and seed points are in the same coordinate system.
 - **Permission errors during install**: Try running Slicer with appropriate permissions for writing under its Python environment, or install packages manually with **`PythonSlicer -m pip`** after diagnosing the error.
 
 ## Prerequisites for SeqSeg
 
-**Using this extension:** install **PyTorch** and **Slicer NNUNet** from the Extension Manager ([Prerequisites](#prerequisites)) so **`torch` 2.2.2** and **`nnunetv2` 2.5.1** are available in Slicer’s Python. Then install **pretrained** nnUNet weights with the **download buttons** in the module—no manual command-line nnUNet training for typical use.
+**Using this extension:** **Run SeqSeg** installs **`torch` 2.2.2** and **`nnunetv2` 2.5.1** (2.7.0 or newer on macOS) into Slicer’s Python when they are missing ([Prerequisites](#prerequisites)). Then install **pretrained** nnUNet weights with the **download buttons** in the module—no manual command-line nnUNet training for typical use.
 
 The underlying SeqSeg / nnUNet stack ultimately needs:
-1. **PyTorch** and **`nnunetv2`** managed through those Slicer extensions (not ad hoc system-wide pip alone).
+1. **`torch` 2.2.2** (with **`torchvision` 0.17.2**) and **`nnunetv2`**, installed into Slicer’s Python by **Run SeqSeg**. The PyTorch and NNUNet extensions are used when they are installed; otherwise the module installs the packages itself. A system-wide `pip install` into a different Python is not the interpreter SeqSeg runs.
 2. The **`seqseg`** Python package (**`seqseg>=2.1.1`**, upgraded to the latest PyPI release when a newer one is available) plus its remaining dependencies, installed via **`slicer.util.pip_install`** with selective skipping of Slicer-managed packages (see [First-time Python setup](#first-time-python-setup)).
 3. **Trained model files** on disk—the extension supplies these via **Download Aorta…** / **Download Coronary CT…** unless you point **nnUNet Results Path** at your own trained outputs (e.g., `Dataset005_SEQAORTANDFEMOMR`, `Dataset006_SEQAORTANDFEMOCT`, or `Dataset010_SEQCOROASOCACT` for coronary CT).
 4. For **custom** nnUNet layouts, the environment variables your setup expects; using the module’s **download buttons** covers the common case without manual variable tuning.

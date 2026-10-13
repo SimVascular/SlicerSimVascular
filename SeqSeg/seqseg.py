@@ -61,7 +61,7 @@ class seqseg(ScriptedLoadableModule):
         self.parent.helpText = _("""
 SeqSeg Vessel Segmentation is a seed-based vascular segmentation module for 3D Slicer. It uses the SeqSeg Python package,
 requires one or more seed lines (start + direction; radius is the line length) and a volume as input, and produces a segmentation, surface mesh, and centerline.
-Install <b>PyTorch</b> and <b>Slicer NNUNet</b> manually from Slicer Extensions before running; pretrained nnUNet weights use the <b>Download Aorta Weights (CT/MR)</b> and <b>Download Coronary CT Weights</b> buttons in <b>nnUNet Configuration</b>.
+The first <b>Run SeqSeg</b> installs <b>torch 2.2.2</b> and <b>nnunetv2</b> if they are missing: through the PyTorch and Slicer NNUNet extensions when those are installed, and with pip otherwise. Pretrained nnUNet weights use the <b>Download Aorta Weights (CT/MR)</b> and <b>Download Coronary CT Weights</b> buttons in <b>nnUNet Configuration</b>.
 See more information in <a href="https://github.com/numisveinsson/SeqSeg">SeqSeg package documentation</a>.
 """)
         self.parent.acknowledgementText = _("""
@@ -1802,10 +1802,21 @@ class seqsegLogic(ScriptedLoadableModuleLogic):
     SEQSEG_PYTHON_PACKAGE_NAME = "seqseg"
     MINIMUM_SEQSEG_VERSION = "2.1.1"
 
-    def pipInstallSelective(self, packageToInstall, installCommand, packagesToSkip):
-        """Install a Python distribution without deps, strip skipped Requires-Dist lines, then pip-install remaining requires."""
+    def pipInstallSelective(self, packageToInstall, installCommand, packagesToSkip, recursive=False, _seen=None):
+        """Install a Python distribution without deps, strip skipped Requires-Dist lines, then pip-install remaining requires.
 
-        slicer.util.pip_install(f"{installCommand} --no-deps")
+        ``recursive`` walks the whole tree. nnunetv2 needs that: its dependencies
+        declare torch themselves, and a one-level install would let pip replace
+        the build installed for this module. The seqseg install stays one level.
+        """
+        if _seen is None:
+            _seen = set()
+        seenKey = packageToInstall.lower().replace("_", "-")
+        if seenKey in _seen:
+            return []
+        _seen.add(seenKey)
+
+        self._pipInstall(f"{installCommand} --no-deps")
         skippedRequirements = []
 
         import importlib.metadata
@@ -1834,6 +1845,8 @@ class seqsegLogic(ScriptedLoadableModuleLogic):
         if requirements is None:
             return skippedRequirements
 
+        from packaging.requirements import Requirement
+
         for requirement in requirements:
             skipThisPackage = False
             for packageToSkip in packagesToSkip:
@@ -1841,23 +1854,284 @@ class seqsegLogic(ScriptedLoadableModuleLogic):
                     skipThisPackage = True
                     break
 
-            match = False
-            if not match:
-                match = re.match(r'([\S]+)[\s]*; extra == "([^"]+)"', requirement)
-                if match:
-                    requirement = f"{match.group(1)}"
-            if not match:
-                match = re.match(r"([\S]+)[\s](.+)", requirement)
-                if match:
-                    requirement = f"{match.group(1)}{match.group(2)}"
-
             if skipThisPackage:
                 logging.info(_("Skipping dependency (provided by Slicer or installed separately): {requirement}").format(requirement=requirement))
+            elif not self._markerApplies(requirement):
+                # Linux CUDA wheels and dev extras are requirements for some other
+                # install. Evaluating the marker here keeps them out of this Slicer.
+                logging.info(_("Skipping dependency (marker does not apply): {requirement}").format(requirement=requirement))
+            elif self._requirementSatisfied(requirement):
+                logging.info(_("Dependency already satisfied: {requirement}").format(requirement=requirement))
+            elif recursive:
+                logging.info(_("Installing {package} dependency: {requirement}").format(package=packageToInstall, requirement=requirement))
+                try:
+                    dependencyName = Requirement(requirement).name
+                except Exception:
+                    self._pipInstall(requirement)
+                else:
+                    self.pipInstallSelective(
+                        dependencyName, requirement, packagesToSkip, recursive=True, _seen=_seen
+                    )
             else:
-                logging.info(_("Installing SeqSeg dependency: {requirement}").format(requirement=requirement))
-                slicer.util.pip_install(requirement)
+                logging.info(_("Installing {package} dependency: {requirement}").format(package=packageToInstall, requirement=requirement))
+                self._pipInstall(requirement)
 
         return skippedRequirements
+
+    def _pipRequirementArg(self, requirement):
+        """One argument for ``slicer.util.pip_install``.
+
+        That helper shlex-splits its string. The old rewriter deleted the space
+        after ``;``, so ``numexpr>=2.14.1; platform_machine != "wasm32"`` became
+        ``numexpr>=2.14.1;platform_machine != "wasm32"``. shlex then split on the
+        space before ``!=``, and pip parsed a marker whose whole text was
+        ``platform_machine``.
+        """
+        import shlex
+
+        spec, sep, flags = requirement.partition(" --")
+        if any(ch in spec for ch in ' ;"\'()'):
+            spec = shlex.quote(spec)
+        return f"{spec}{sep}{flags}" if sep else spec
+
+    def _numpyConstraintFile(self):
+        """A pip constraint that keeps NumPy on 1.x.
+
+        Written once. Every later install is run with ``-c`` this file, so a
+        dependency that asks for NumPy 2 cannot replace the downgrade and
+        force another restart.
+        """
+        path = getattr(self, "_numpyConstraintPath", None)
+        if path and os.path.isfile(path):
+            return path
+        import tempfile
+
+        path = os.path.join(tempfile.gettempdir(), "slicer-seqseg-numpy-lt2.txt")
+        with open(path, "w", encoding="utf8") as handle:
+            handle.write("numpy<2\n")
+        self._numpyConstraintPath = path
+        return path
+
+    def _pipInstall(self, requirement):
+        """Install with pip, refusing NumPy 2.
+
+        torch 2.2.2 cannot import against NumPy 2. imagecodecs and a new
+        scipy will otherwise resolve NumPy 2 after the downgrade. The run
+        then fails, and the next Run downgrades NumPy and asks for a second
+        restart.
+        """
+        import shlex
+
+        arg = self._pipRequirementArg(requirement)
+        spec = requirement.partition(" --")[0]
+        from packaging.requirements import Requirement
+
+        pin_numpy = True
+        try:
+            pin_numpy = Requirement(spec).name.lower().replace("_", "-") != "numpy"
+        except Exception:
+            pin_numpy = not spec.lower().startswith("numpy")
+        if pin_numpy:
+            arg = f"{arg} -c {shlex.quote(self._numpyConstraintFile())}"
+        slicer.util.pip_install(arg)
+
+    def _markerApplies(self, requirement):
+        """False when a Requires-Dist marker excludes this interpreter.
+
+        ``extra == "dev"`` and ``platform_system == "Linux"`` are requirements
+        for some other install, not missing packages.
+        """
+        from packaging.requirements import Requirement
+
+        try:
+            req = Requirement(requirement)
+        except Exception:
+            return True
+        if req.marker is None:
+            return True
+        return bool(req.marker.evaluate())
+
+    def _installedDistributionVersion(self, packageName):
+        import importlib.metadata
+
+        try:
+            return importlib.metadata.version(packageName)
+        except importlib.metadata.PackageNotFoundError:
+            return None
+
+    def _requirementSatisfied(self, requirement):
+        """True when this environment already meets a Requires-Dist line.
+
+        A marker that does not apply counts as satisfied, so the installer
+        does not fetch a package this Slicer will never import.
+        """
+        from packaging.requirements import Requirement
+        from packaging.version import InvalidVersion
+        from packaging.version import parse
+
+        try:
+            req = Requirement(requirement)
+        except Exception:
+            return False
+        if req.marker is not None and not req.marker.evaluate():
+            return True
+        installed = self._installedDistributionVersion(req.name)
+        if installed is None:
+            return False
+        if not req.specifier:
+            return True
+        try:
+            return parse(installed) in req.specifier
+        except InvalidVersion:
+            return False
+
+    def _slicerTesting(self):
+        """True under ``slicer_add_python_unittest``.
+
+        That run must not download torch: the test only checks that a missing
+        install raises, and a PyTorch wheel is hundreds of megabytes.
+        """
+        try:
+            return bool(slicer.app.testingEnabled())
+        except Exception:
+            return False
+
+    def _installTorchWithoutExtension(self, requiredTorchVersion, requiredTorchVisionVersion):
+        """Install the pinned torch wheel without the PyTorch extension.
+
+        ``pip install torch==2.2.2`` takes whatever wheel is the default on
+        PyPI. On Linux and Windows that wheel often has no CUDA kernels for
+        the GPU in the machine, and nnU-Net then reports the failure as an
+        out-of-memory error. light-the-torch is what PyTorchUtils uses to
+        pick a wheel from the driver version instead.
+        """
+        import importlib
+
+        # The Slicer fork's setuptools-scm version is not in the zip. Without
+        # this, pip fails before light-the-torch is importable.
+        os.environ["SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LIGHT_THE_TORCH"] = "0.8.0"
+        try:
+            import light_the_torch._patch  # noqa: F401
+        except ImportError:
+            logging.info(_("Installing light-the-torch so PyTorch matches this machine's GPU..."))
+            slicer.util.pip_install("https://github.com/Slicer/light-the-torch/archive/main.zip")
+            importlib.invalidate_caches()
+            import light_the_torch._patch  # noqa: F401
+
+        # torch 2.2.2 is built against NumPy 1.x. Without the pin, resolving
+        # the wheel can pull NumPy 2 and the next import dies with _ARRAY_API not found.
+        args = [
+            "install",
+            f"torch=={requiredTorchVersion}",
+            f"torchvision=={requiredTorchVisionVersion}",
+            "numpy<2",
+        ]
+        logging.info("Install PyTorch using light-the-torch with arguments: %s", args)
+        execute = getattr(slicer.util, "executePythonModule", None) or getattr(slicer.util, "_executePythonModule", None)
+        if execute is None:
+            raise InstallError(_("This Slicer build cannot run light-the-torch (no executePythonModule)."))
+        execute("light_the_torch", args)
+        importlib.invalidate_caches()
+
+    def _nnunetPackagesToSkip(self):
+        """Packages pip must not replace while installing nnunetv2.
+
+        Slicer's SimpleITK has its own IO factory, torch 2.2.2 cannot import
+        against NumPy 2, and replacing requests forces a Slicer restart.
+        """
+        packagesToSkip = [
+            "SimpleITK",
+            "torch",
+            "torchvision",
+            "numpy",
+            "requests",
+        ]
+        if sys.version_info < (3, 12):
+            # acvl-utils 0.2.1 and 0.2.2 fail on the Python 3.9 Slicer still
+            # ships (5.8 and earlier). Installed afterwards at 0.2.0.
+            packagesToSkip.extend(["acvl-utils", "acvl_utils"])
+        if sys.platform == "darwin":
+            packagesToSkip.append("imagecodecs")
+        return packagesToSkip
+
+    def _dependencyTreeCovered(self, packageName, packagesToSkip, seen=None):
+        """False when a failed install left a package without a dependency.
+
+        nnunetv2 can already be at the required version while numexpr, which
+        blosc2 asks for, never got installed: the marker line crashed pip
+        before that requirement was reached. The version check would then
+        skip the tree, and the next Run would not try again.
+        """
+        if seen is None:
+            seen = set()
+        seenKey = packageName.lower().replace("_", "-")
+        if seenKey in seen:
+            return True
+        seen.add(seenKey)
+        if self._installedDistributionVersion(packageName) is None:
+            return False
+        import importlib.metadata
+        from packaging.requirements import Requirement
+
+        try:
+            requirements = importlib.metadata.requires(packageName) or []
+        except importlib.metadata.PackageNotFoundError:
+            return False
+        for requirement in requirements:
+            if any(requirement.startswith(packageToSkip) for packageToSkip in packagesToSkip):
+                continue
+            if not self._markerApplies(requirement):
+                continue
+            if not self._requirementSatisfied(requirement):
+                return False
+            try:
+                dependencyName = Requirement(requirement).name
+            except Exception:
+                continue
+            if not self._dependencyTreeCovered(dependencyName, packagesToSkip, seen):
+                return False
+        return True
+
+    def _installNnunetWithoutExtension(self, nnunetRequirement):
+        """Install nnunetv2 without the NNUNet extension."""
+        packagesToSkip = self._nnunetPackagesToSkip()
+        if sys.platform == "darwin":
+            self._installImagecodecsForDarwin()
+
+        logging.info(_("Installing nnunetv2 with pip ({spec})...").format(spec=nnunetRequirement))
+        self.pipInstallSelective("nnunetv2", nnunetRequirement, packagesToSkip, recursive=True)
+        if sys.version_info < (3, 12):
+            self._installWorkingAcvlUtils()
+
+    def _installImagecodecsForDarwin(self):
+        """imagecodecs wheels after 2026.3.6 are arm64-only.
+
+        An x86_64 Slicer, including one running under Rosetta, would otherwise
+        try to compile imagecodecs from source when nnunetv2 is installed, and
+        that build fails.
+        """
+        if self._installedDistributionVersion("imagecodecs") is not None:
+            return
+        logging.info(_("Installing imagecodecs compatible with this Slicer build..."))
+        # --no-deps: a current imagecodecs wheel requires NumPy 2, and a normal
+        # install would undo the NumPy 1 pin before SeqSeg ever runs.
+        self._pipInstall("imagecodecs<=2026.3.6 --no-deps")
+
+    def _installWorkingAcvlUtils(self):
+        """acvl-utils 0.2.1 and 0.2.2 do not import on Python 3.9.
+
+        0.2.0 is the last release that does, which is what SlicerNNUNet
+        installs on Slicer 5.8 and earlier.
+        """
+        from packaging.version import parse
+
+        installed = self._installedDistributionVersion("acvl_utils")
+        if installed is None:
+            installed = self._installedDistributionVersion("acvl-utils")
+        if installed is not None and parse(installed) == parse("0.2"):
+            return
+        logging.info(_("Installing a working acvl-utils package version..."))
+        self._pipInstall("acvl_utils==0.2.0")
 
     def _latest_pypi_version(self, package_name):
         """Return the current version on PyPI, or None if the lookup fails."""
@@ -1934,7 +2208,15 @@ class seqsegLogic(ScriptedLoadableModuleLogic):
         return target_spec
 
     def setupPythonRequirements(self, upgrade=False):
-        """Install PyTorch (via PyTorch extension), nnUNet v2 (via Slicer NNUNet), and the seqseg PyPI package with selective deps."""
+        """Install torch, nnunetv2, and the seqseg package.
+
+        The PyTorch and NNUNet extensions are used when they are loaded, because
+        that is how the rest of Slicer's nnUNet modules install these packages.
+        Without them, the same versions are installed here. A plain
+        ``pip install torch`` often fetches a wheel with no kernels for this
+        GPU, which nnU-Net then reports as an out-of-memory error, so that
+        path goes through light-the-torch the way PyTorchUtils does.
+        """
 
         import importlib.metadata
 
@@ -1950,15 +2232,14 @@ class seqsegLogic(ScriptedLoadableModuleLogic):
             return pkg_version.parse(version_str).base_version == requiredTorchVersion
 
         # torch 2.2.2 is built against NumPy 1.x; NumPy 2.x fails import with _ARRAY_API not found.
-        # Downgrade before torchInstalled() (which imports torch). Restart so the process unloads NumPy 2.
+        # Downgrade first, but keep going: restarting here installs the other packages on the
+        # next launch, those packages pull NumPy 2 back, the run fails, and the launch after
+        # that downgrades NumPy and asks for a second restart.
         numpy_version_str = importlib.metadata.version("numpy")
-        if pkg_version.parse(numpy_version_str) >= pkg_version.parse("2.0.0"):
+        restart_for_numpy = pkg_version.parse(numpy_version_str) >= pkg_version.parse("2.0.0")
+        if restart_for_numpy:
             logging.info(_("Downgrading NumPy from {current} to <2 for PyTorch 2.2.2 compatibility...").format(current=numpy_version_str))
-            slicer.util.pip_install("numpy<2")
-            raise InstallError(
-                _("NumPy 2.x is incompatible with the required PyTorch 2.2.2. NumPy was downgraded to 1.x; restart Slicer and run SeqSeg again."),
-                restartRequired=True,
-            )
+            self._pipInstall("numpy<2")
 
         packagesToSkip = [
             "SimpleITK",
@@ -1973,40 +2254,75 @@ class seqsegLogic(ScriptedLoadableModuleLogic):
         confirmPackagesToInstall = []
 
         try:
-            import PyTorchUtils  # noqa: F401
+            import PyTorchUtils
         except ModuleNotFoundError:
-            raise InstallError(
-                _(
-                    "This module requires the PyTorch extension (module PyTorchUtils).\n\n"
-                    "In Slicer: View → Extension Manager → search PyTorch → Install → restart Slicer if prompted.\n"
-                    "After installing SeqSeg Vessel Segmentation from the catalog, PyTorch should install automatically as a dependency."
-                )
-            )
+            PyTorchUtils = None
+            logging.info("PyTorch extension is not installed. SeqSeg will install torch itself if it is missing.")
 
-        torchLogic = PyTorchUtils.PyTorchUtilsLogic()
-        if not torchLogic.torchInstalled():
-            confirmPackagesToInstall.append("PyTorch")
-        elif not _torch_base_matches(torchLogic.torch.__version__):
-            confirmPackagesToInstall.append("PyTorch")
-
+        # SlicerNNUNet's installer stops until the PyTorch extension is present
+        # and then asks for a restart. Without that extension, install nnunet here.
         try:
-            import SlicerNNUNetLib  # noqa: F401
+            import SlicerNNUNetLib
         except ModuleNotFoundError:
-            raise InstallError(
-                _(
-                    "This module requires the NNUNet extension (module SlicerNNUNetLib).\n\n"
-                    "In Slicer: View → Extension Manager → search NNUNet → Install → restart Slicer if prompted.\n"
-                    "After installing SeqSeg Vessel Segmentation from the catalog, NNUNet should install automatically as a dependency."
-                )
+            SlicerNNUNetLib = None
+            logging.info("NNUNet extension is not installed. SeqSeg will install nnunetv2 itself if it is missing.")
+        useNnunetExtension = SlicerNNUNetLib is not None and PyTorchUtils is not None
+        # NumPy 2 is still the module loaded in this process. torchInstalled()
+        # and SlicerNNUNet both import torch, which fails with _ARRAY_API not
+        # found until Slicer is restarted onto NumPy 1.
+        if restart_for_numpy:
+            useNnunetExtension = False
+
+        torchLogic = None
+        nnunetlogic = None
+        if not restart_for_numpy and PyTorchUtils is not None:
+            torchLogic = PyTorchUtils.PyTorchUtilsLogic()
+            if not torchLogic.torchInstalled():
+                confirmPackagesToInstall.append("PyTorch")
+            elif not _torch_base_matches(torchLogic.torch.__version__):
+                confirmPackagesToInstall.append("PyTorch")
+        else:
+            torchVersion = self._installedDistributionVersion("torch")
+            torchvisionVersion = self._installedDistributionVersion("torchvision")
+            torchOk = torchVersion is not None and _torch_base_matches(torchVersion)
+            visionOk = (
+                torchvisionVersion is not None
+                and pkg_version.parse(torchvisionVersion).base_version == requiredTorchVisionVersion
             )
+            if not torchOk or not visionOk:
+                confirmPackagesToInstall.append("PyTorch")
 
-        nnunetlogic = SlicerNNUNetLib.InstallLogic(doAskConfirmation=False)
-        nnunetlogic.getInstalledNNUnetVersion()
+        # nnunetv2 below 2.7 does not run under Rosetta2. SlicerNNUNet raises
+        # the floor itself; the pip path has to do the same or a Mac without
+        # the extension installs a version that cannot import.
+        nnunetFloor = minimumNnunetV2Version
+        if not useNnunetExtension and sys.platform == "darwin" and pkg_version.parse("2.7.0") > minimum_nnunet_v:
+            nnunetFloor = "2.7.0"
+        nnunet_floor_v = pkg_version.parse(nnunetFloor)
 
-        if not nnunetlogic.isPackageInstalled(Requirement("nnunetv2")):
-            confirmPackagesToInstall.append("nnunetv2")
-        elif pkg_version.parse(str(nnunetlogic.getInstalledNNUnetVersion())) < minimum_nnunet_v:
-            confirmPackagesToInstall.append("nnunetv2")
+        if useNnunetExtension:
+            nnunetlogic = SlicerNNUNetLib.InstallLogic(doAskConfirmation=False)
+            if not nnunetlogic.isPackageInstalled(Requirement("nnunetv2")):
+                confirmPackagesToInstall.append("nnunetv2")
+            elif pkg_version.parse(str(nnunetlogic.getInstalledNNUnetVersion())) < minimum_nnunet_v:
+                confirmPackagesToInstall.append("nnunetv2")
+        else:
+            installedNnunet = self._installedDistributionVersion("nnunetv2")
+            treeReady = (
+                installedNnunet is not None
+                and self._dependencyTreeCovered("nnunetv2", self._nnunetPackagesToSkip())
+            )
+            if installedNnunet is None or pkg_version.parse(installedNnunet) < nnunet_floor_v or not treeReady:
+                confirmPackagesToInstall.append("nnunetv2")
+
+        pipFallback = ("PyTorch" in confirmPackagesToInstall and PyTorchUtils is None) or (
+            "nnunetv2" in confirmPackagesToInstall and not useNnunetExtension
+        )
+        if pipFallback and self._slicerTesting():
+            raise InstallError(
+                _("torch and nnunetv2 are not installed. Automatic installation is skipped while Slicer is running with --testing."),
+                restartRequired=False,
+            )
 
         if confirmPackagesToInstall:
             if not slicer.util.confirmOkCancelDisplay(
@@ -2016,47 +2332,108 @@ class seqsegLogic(ScriptedLoadableModuleLogic):
                     package_list=", ".join(confirmPackagesToInstall)
                 ),
             ):
+                if restart_for_numpy:
+                    raise InstallError(
+                        _("NumPy was downgraded to 1.x for PyTorch 2.2.2. Restart Slicer. Package installation was cancelled."),
+                        restartRequired=True,
+                    )
                 raise InstallError(_("User cancelled installation."), restartRequired=False)
 
+        torchAlreadyImported = "torch" in sys.modules
+        restart_for_torch = False
         if "PyTorch" in confirmPackagesToInstall:
             logging.info(_("Installing PyTorch Python packages (may take several minutes)..."))
-            torch_result = torchLogic.installTorch(
-                askConfirmation=False,
-                torchVersionRequirement=f"=={requiredTorchVersion}",
-                torchVisionVersionRequirement=f"=={requiredTorchVisionVersion}",
+            # installTorch imports torch. Skip it while this process still has NumPy 2 loaded.
+            if PyTorchUtils is not None and not restart_for_numpy:
+                torch_result = torchLogic.installTorch(
+                    askConfirmation=False,
+                    torchVersionRequirement=f"=={requiredTorchVersion}",
+                    torchVisionVersionRequirement=f"=={requiredTorchVisionVersion}",
+                )
+                if torch_result is None:
+                    raise InstallError(_("PyTorch installation failed. Install the PyTorch extension from the Extensions Manager."))
+            else:
+                try:
+                    self._installTorchWithoutExtension(requiredTorchVersion, requiredTorchVisionVersion)
+                except InstallError:
+                    raise
+                except Exception as exc:
+                    raise InstallError(
+                        _("PyTorch installation failed ({error}). See the Python console for pip output.").format(error=exc)
+                    ) from exc
+            # importlib still has the previous scan cached. An already-imported
+            # torch module is also not the wheel pip just wrote.
+            import importlib
+            importlib.invalidate_caches()
+            installedTorchVersion = self._installedDistributionVersion("torch")
+            if not installedTorchVersion or not _torch_base_matches(installedTorchVersion):
+                remedy = (
+                    _("Use the PyTorch Util module to install a compatible build.")
+                    if PyTorchUtils is not None
+                    else _("See the Python console for pip output.")
+                )
+                raise InstallError(
+                    _("PyTorch version {current} was expected after install ({required}). {remedy}").format(
+                        current=installedTorchVersion,
+                        required=requiredTorchVersion,
+                        remedy=remedy,
+                    )
+                )
+            # A torch already imported in this process stays the old module
+            # after pip replaces the files. Finish the other installs first, then
+            # restart once, so this is not a failed run followed by another downgrade.
+            if torchAlreadyImported:
+                restart_for_torch = True
+        elif (
+            not restart_for_numpy
+            and PyTorchUtils is not None
+            and not _torch_base_matches(torchLogic.torch.__version__)
+        ):
+            raise InstallError(
+                _("PyTorch version {current} is required to be {required}. Use the PyTorch Util module to install a compatible build.").format(
+                    current=torchLogic.torch.__version__,
+                    required=requiredTorchVersion,
+                )
             )
-            if torch_result is None:
-                raise InstallError(_("PyTorch installation failed. Install the PyTorch extension from the Extensions Manager."))
-            if not _torch_base_matches(torchLogic.torch.__version__):
-                raise InstallError(
-                    _("PyTorch version {current} was expected after install ({required}). Use the PyTorch Util module to install a compatible build.").format(
-                        current=torchLogic.torch.__version__,
-                        required=requiredTorchVersion,
-                    )
-                )
-        else:
-            if not _torch_base_matches(torchLogic.torch.__version__):
-                raise InstallError(
-                    _("PyTorch version {current} is required to be {required}. Use the PyTorch Util module to install a compatible build.").format(
-                        current=torchLogic.torch.__version__,
-                        required=requiredTorchVersion,
-                    )
-                )
 
         if "nnunetv2" in confirmPackagesToInstall:
             logging.info(_("Installing nnunetv2 (may take several minutes)..."))
-            nnunet_ok = nnunetlogic.setupPythonRequirements(f"nnunetv2>={minimumNnunetV2Version}")
-            if not nnunet_ok:
-                raise InstallError(_("nnUNet v2 installation failed. Install the Slicer NNUNet extension from the Extensions Manager."))
-            installed_nnunet_version = pkg_version.parse(str(nnunetlogic.getInstalledNNUnetVersion()))
-            if installed_nnunet_version < minimum_nnunet_v:
+            if useNnunetExtension:
+                nnunet_ok = nnunetlogic.setupPythonRequirements(f"nnunetv2>={minimumNnunetV2Version}")
+                if not nnunet_ok:
+                    raise InstallError(_("nnUNet v2 installation failed. Install the Slicer NNUNet extension from the Extensions Manager."))
+                installed_nnunet_version = pkg_version.parse(str(nnunetlogic.getInstalledNNUnetVersion()))
+                version_floor = minimum_nnunet_v
+                version_floor_text = minimumNnunetV2Version
+            else:
+                try:
+                    self._installNnunetWithoutExtension(f"nnunetv2>={nnunetFloor}")
+                except InstallError:
+                    raise
+                except Exception as exc:
+                    raise InstallError(
+                        _("nnUNet v2 installation failed ({error}). See the Python console for pip output.").format(error=exc)
+                    ) from exc
+                installed_nnunet_text = self._installedDistributionVersion("nnunetv2")
+                if not installed_nnunet_text:
+                    raise InstallError(_("nnUNet v2 installation failed. See the Python console for pip output."))
+                installed_nnunet_version = pkg_version.parse(installed_nnunet_text)
+                version_floor = nnunet_floor_v
+                version_floor_text = nnunetFloor
+            if installed_nnunet_version < version_floor:
+                remedy = (
+                    _("Use the nnUNet module to install a compatible version.")
+                    if useNnunetExtension
+                    else _("See the Python console for pip output.")
+                )
                 raise InstallError(
-                    _("nnUNet v2 version {current} was installed but at least {required} is required. Use the nnUNet module to install a compatible version.").format(
+                    _("nnUNet v2 version {current} was installed but at least {required} is required. {remedy}").format(
                         current=installed_nnunet_version,
-                        required=minimumNnunetV2Version,
+                        required=version_floor_text,
+                        remedy=remedy,
                     )
                 )
-        else:
+        elif useNnunetExtension:
             installed_nnunet_version = pkg_version.parse(str(nnunetlogic.getInstalledNNUnetVersion()))
             if installed_nnunet_version < minimum_nnunet_v:
                 raise InstallError(
@@ -2088,6 +2465,24 @@ class seqsegLogic(ScriptedLoadableModuleLogic):
                     current=installed_seqseg_version,
                     required=self.MINIMUM_SEQSEG_VERSION,
                 )
+            )
+
+        import importlib
+        importlib.invalidate_caches()
+        disk_numpy = self._installedDistributionVersion("numpy")
+        if disk_numpy and pkg_version.parse(disk_numpy) >= pkg_version.parse("2.0.0"):
+            logging.info(_("NumPy {current} was installed by a dependency; downgrading to <2.").format(current=disk_numpy))
+            self._pipInstall("numpy<2")
+            restart_for_numpy = True
+        if restart_for_numpy:
+            raise InstallError(
+                _("NumPy 2.x is incompatible with PyTorch 2.2.2. NumPy was downgraded to 1.x and the Python packages were installed. Restart Slicer and run SeqSeg again."),
+                restartRequired=True,
+            )
+        if restart_for_torch:
+            raise InstallError(
+                _("PyTorch was upgraded in this session. Restart Slicer so SeqSeg imports the new torch."),
+                restartRequired=True,
             )
 
     def showSegmentationOverVolume(self, segmentationNode, volumeNode, overlayOpacity=0.45):
@@ -2177,7 +2572,7 @@ class seqsegLogic(ScriptedLoadableModuleLogic):
                 "PyTorch CUDA cannot execute kernels on this GPU "
                 "(no kernel image is available for execution on the device). "
                 "The installed torch build does not match this GPU architecture. "
-                "Install a matching PyTorch CUDA wheel in PyTorch Util, or run on CPU."
+                "Install a PyTorch build that has kernels for this GPU, or run on CPU."
             )
         if "Didnt work for first surface" in text and "Ratio of processed voxels: 0.00%" in text:
             return (
@@ -2541,7 +2936,7 @@ class seqsegLogic(ScriptedLoadableModuleLogic):
                     logging.warning(
                         "PyTorch CUDA is visible but cannot execute kernels on this GPU. "
                         "Running SeqSeg with -cpu (slower). To use the GPU, install a PyTorch "
-                        "build that matches this GPU architecture in the PyTorch Util module."
+                        "build that has kernels for this GPU."
                     )
 
             result = self._run_seqseg_cli(cpu_cmd if force_cpu else seqseg_cmd, cwd=data_dir)

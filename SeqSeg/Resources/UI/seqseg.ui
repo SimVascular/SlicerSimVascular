@@ -14,7 +14,7 @@
    <item>
     <widget class="QLabel" name="dependencyDescriptorLabel">
      <property name="text">
-      <string>Requires PyTorch and NNUNet via Slicer Extensions before running. Install torch 2.2.2 and nnunetv2 2.5.1.</string>
+      <string>First Run installs torch 2.2.2 and nnunetv2 2.5.1 if they are missing. The PyTorch and NNUNet extensions are used when they are installed.</string>
      </property>
      <property name="wordWrap">
       <bool>true</bool>
