@@ -367,10 +367,8 @@ class SimVascularMeshPrepWidget(ScriptedLoadableModuleWidget, VTKObservationMixi
         mesh = self.ui.inputMeshSelector.currentNode()
         if self._measured and mesh is not None:
             names = {faceId: name for faceId, name in self.effectiveNames().items() if name}
-            mesh.SetAttribute(FACE_NAMES_ATTRIBUTE, self.logic.writeNames(names))
-            mesh.SetAttribute(INHERITED_FACE_NAMES_ATTRIBUTE, self.logic.writeNames(
-                {faceId: name for faceId, name in names.items()
-                 if self.isInherited(faceId)}))
+            self.logic.saveNames(mesh, names,
+                                 inherited=[faceId for faceId in names if self.isInherited(faceId)])
         node.SetParameter(FACE_ID_ARRAY_PARAMETER, self.ui.faceIdArrayLineEdit.text)
         node.SetParameter(
             OUTPUT_DIRECTORY_PARAMETER, self.ui.outputDirectoryPathLineEdit.currentPath or ""
@@ -1196,6 +1194,27 @@ class SimVascularMeshPrepLogic(ScriptedLoadableModuleLogic):
             separators=(",", ":"),
         )
 
+    @classmethod
+    def saveNames(cls, meshNode, names, inherited=()):
+        """Put a mesh's face names on it, the way the panel saves them: every name, and which
+        of them nobody typed.
+
+        The panel's own save, lifted out of the panel so that a script naming a mesh writes
+        exactly what the panel would. The case it is for is a mesh made with no window open --
+        meshed from a terminal and named from the clip it came out of -- which has to arrive
+        in this panel looking the same as one named here: every name in `FaceNames`, and the
+        inherited ones flagged in `InheritedFaceNames` so that they keep following the clip
+        point they came from rather than freezing into overrides nobody chose.
+
+        :param names: `{faceId: name}`, every name the mesh should carry.
+        :param inherited: the face ids among them whose names came from upstream rather than
+          from typing. An id with no name in `names` is not saved as inherited either.
+        """
+        inheritedIds = set(inherited)
+        meshNode.SetAttribute(FACE_NAMES_ATTRIBUTE, cls.writeNames(names))
+        meshNode.SetAttribute(INHERITED_FACE_NAMES_ATTRIBUTE, cls.writeNames(
+            {faceId: name for faceId, name in names.items() if faceId in inheritedIds}))
+
     @staticmethod
     def readNames(text):
         """The names back out, and nothing at all rather than an exception from a bad one."""
@@ -1425,6 +1444,8 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
         self.setUp()
         self.test_everyNameIsSavedOnTheMeshAndInheritedOnesStillFollowTheClip()
         self.setUp()
+        self.test_aMeshNamedByAScriptOpensAsThePanelWouldHaveSavedIt()
+        self.setUp()
         self.test_aSavedInheritedNameStandsWhenTheClipIsGone()
         self.setUp()
         self.test_twoAnatomiesInOneSceneKeepTheirOwnNames()
@@ -1569,6 +1590,47 @@ class SimVascularMeshPrepTest(ScriptedLoadableModuleTest):
                              {1: "wall", 2: "cap_RSVC", 3: "cap_azygous"})
 
         self.delayDisplay("Every name saved on its mesh, inherited ones following the clip")
+
+    def test_aMeshNamedByAScriptOpensAsThePanelWouldHaveSavedIt(self):
+        """`saveNames` from a script, with no panel open, leaves what the panel's own save does.
+
+        The case it exists for: a mesh made and named from a terminal -- caps inherited from
+        the clip, the rest given by the script -- which somebody later opens here. It has to
+        open with the script's names in the table, the inherited ones still dimmed and still
+        following their clip points, and the given ones as overrides, exactly as if they had
+        been typed. Anything else and the panel would be showing a mesh named one way and
+        saved another.
+        """
+        logic = SimVascularMeshPrepLogic()
+        mesh, clipPoints = self.recordedMesh(("Inlet", "Outlet 1"))
+        inherited = logic.inheritedNames(mesh).names
+        names = {**inherited, 3: "cap_azygous"}
+        logic.saveNames(mesh, names, inherited=[faceId for faceId in inherited if faceId != 3])
+
+        self.assertEqual(logic.readNames(mesh.GetAttribute(FACE_NAMES_ATTRIBUTE)),
+                         {1: "wall", 2: "cap_Inlet", 3: "cap_azygous"})
+        self.assertEqual(logic.readNames(mesh.GetAttribute(INHERITED_FACE_NAMES_ATTRIBUTE)),
+                         {1: "wall", 2: "cap_Inlet"},
+                         "only the names nobody gave are saved as inherited")
+
+        # An id flagged inherited with no name of its own is not invented into the record.
+        logic.saveNames(mesh, {1: "wall"}, inherited=[1, 2])
+        self.assertEqual(logic.readNames(mesh.GetAttribute(INHERITED_FACE_NAMES_ATTRIBUTE)),
+                         {1: "wall"})
+        logic.saveNames(mesh, names, inherited=[faceId for faceId in inherited if faceId != 3])
+
+        widget = slicer.util.getModuleWidget("SimVascularMeshPrep")
+        widget.ui.faceIdArrayLineEdit.text = "CellEntityIds, ModelFaceID"
+        widget.ui.inputMeshSelector.setCurrentNode(mesh)
+        self.assertEqual(widget.effectiveNames(),
+                         {1: "wall", 2: "cap_Inlet", 3: "cap_azygous"})
+        self.assertEqual(widget._overrides, {3: "cap_azygous"},
+                         "a name the script gave opens as an override, as if it had been typed")
+        clipPoints.SetNthControlPointLabel(0, "RSVC")
+        self.assertEqual(widget.effectiveNames()[2], "cap_RSVC",
+                         "and an inherited one still follows the clip point it came from")
+
+        self.delayDisplay("A script's names open in the panel as the panel would have saved them")
 
     def test_aSavedInheritedNameStandsWhenTheClipIsGone(self):
         """A name inherited when the scene was saved answers for a face with no record.
