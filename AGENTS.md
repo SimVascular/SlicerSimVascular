@@ -71,8 +71,9 @@ environment is activated. `SVZERODSOLVER=/path/to/svzerodsolver` points at a bui
 instead. Under Slicer the panel installs `svzerod` itself and runs it as a process, never
 importing it: `svromsetup/solver.py` says why.
 
-**svmpsetup** — pytest; one test runs svMultiPhysics for two time steps on a cube, and skips
-itself unless the solver is at `SVMULTIPHYSICS` or on the PATH:
+**svmpsetup** — pytest; two tests run svMultiPhysics on a cube -- the case for two time steps, and
+the panel's test run of it -- and skip themselves unless the solver is at `SVMULTIPHYSICS` or on
+the PATH:
 
 ```sh
 cd SimVascularMultiPhysics && SVMULTIPHYSICS=/path/to/svmultiphysics python -m pytest
@@ -109,6 +110,13 @@ runs unchanged:
   `slicer.util.getModuleWidget`.
 - `slicer.util.getModuleWidget` returns **the same widget every time**. State a test leaves on it
   outlives `mrmlScene.Clear()`, so reset what you rely on in `setUp`.
+- **With the SimVascular extension installed, its packages come first on the Python path**, ahead
+  of a checkout's: the launcher puts the extension's `qt-scripted-modules` there before any module
+  is found, and `--additional-module-paths` does not change that. So a checkout's
+  module imports the *installed* `svromsetup`, `svmeshcomplete` or `svmpsetup`, of whatever version
+  that is, and fails at startup on anything the checkout added. SimVascular MultiPhysics puts its
+  own folder first before importing `svmpsetup`; ROM and Mesh Prep do not yet. Check with
+  `import svromsetup; print(svromsetup.__file__)`.
 
 Prefer this to driving a live Slicer over MCP for anything repeatable: a clean scene every run,
 and a crash costs nothing. Running a whole suite through MCP `execute_python` has segfaulted

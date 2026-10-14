@@ -12,6 +12,7 @@ set(MODULE_PYTHON_SCRIPTS
   svmpsetup/case.py
   svmpsetup/settings.py
   svmpsetup/solver_xml.py
+  svmpsetup/trial.py
   )
 
 set(MODULE_PYTHON_RESOURCES
