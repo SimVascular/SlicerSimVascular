@@ -5,7 +5,7 @@ project(SimVascular)
 #-----------------------------------------------------------------------------
 # Extension meta-information
 set(EXTENSION_HOMEPAGE "https://github.com/SimVascular/SlicerSimVascular")
-set(EXTENSION_CONTRIBUTORS "Alison Marsden (Cardiovascular Biomechanics Computation Lab, Stanford University), Bohan Jeff Li (Cardiovascular Biomechanics Computation Lab, Stanford University)")
+set(EXTENSION_CONTRIBUTORS "Alison Marsden (Cardiovascular Biomechanics Computation Lab, Stanford University), Bohan Jeff Li (Cardiovascular Biomechanics Computation Lab, Stanford University), Numi Sveinsson Cepero (UT Austin)")
 set(EXTENSION_DESCRIPTION "SimVascular extensions developed by Marsden lab members and associates for 3D Slicer.")
 set(EXTENSION_ICONURL "https://github.com/SimVascular/SlicerSimVascular/raw/main/SimVascular.png")
 # TODO: Update with real screenshot URL
@@ -23,6 +23,7 @@ add_subdirectory(SDFStent)
 add_subdirectory(PaintModel)
 add_subdirectory(FaceAwareRemesh)
 add_subdirectory(SimVascularMeshPrep)
+add_subdirectory(SeqSeg)
 add_subdirectory(SimVascularROM)
 add_subdirectory(SimVascularMultiPhysics)
 ## NEXT_MODULE

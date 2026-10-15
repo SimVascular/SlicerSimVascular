@@ -1,0 +1,745 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>seqseg</class>
+ <widget class="qMRMLWidget" name="seqseg">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>400</width>
+    <height>500</height>
+   </rect>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QLabel" name="dependencyDescriptorLabel">
+     <property name="text">
+      <string>First Run installs torch 2.2.2 and nnunetv2 2.5.1 if they are missing. The PyTorch and NNUNet extensions are used when they are installed.</string>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="inputsCollapsibleButton">
+     <property name="text">
+      <string>Inputs</string>
+     </property>
+     <layout class="QFormLayout" name="formLayout_inputs">
+      <item row="0" column="0">
+       <widget class="QLabel" name="inputVolumeLabel">
+        <property name="text">
+         <string>Input Volume:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="qMRMLNodeComboBox" name="inputSelector">
+        <property name="toolTip">
+         <string>Select input volume for segmentation</string>
+        </property>
+        <property name="nodeTypes">
+         <stringlist notr="true">
+          <string>vtkMRMLScalarVolumeNode</string>
+         </stringlist>
+        </property>
+        <property name="showChildNodeTypes">
+         <bool>false</bool>
+        </property>
+        <property name="addEnabled">
+         <bool>false</bool>
+        </property>
+        <property name="removeEnabled">
+         <bool>false</bool>
+        </property>
+        <property name="SlicerParameterName" stdset="0">
+         <string>inputVolume</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="unitLabel">
+        <property name="text">
+         <string>Image Unit:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QComboBox" name="unitComboBox">
+        <property name="toolTip">
+         <string>Unit of the medical image</string>
+        </property>
+        <property name="currentIndex">
+         <number>0</number>
+        </property>
+        <property name="SlicerParameterName" stdset="0">
+         <string>imageUnit</string>
+        </property>
+        <item>
+         <property name="text">
+          <string>cm</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>mm</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="seedsLabel">
+        <property name="text">
+         <string>Seeds:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QWidget" name="seedsBlockWidget">
+        <layout class="QVBoxLayout" name="seedsBlockLayout">
+         <property name="leftMargin">
+          <number>0</number>
+         </property>
+         <property name="topMargin">
+          <number>0</number>
+         </property>
+         <property name="rightMargin">
+          <number>0</number>
+         </property>
+         <property name="bottomMargin">
+          <number>0</number>
+         </property>
+         <property name="spacing">
+          <number>6</number>
+         </property>
+         <item>
+          <widget class="QLabel" name="seedsHintLabel">
+           <property name="text">
+            <string>Each seed is a 2-point line (start to direction). Radius is the line length in image units.</string>
+           </property>
+           <property name="wordWrap">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QWidget" name="seedRowsWidget">
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
+             <horstretch>0</horstretch>
+             <verstretch>0</verstretch>
+            </sizepolicy>
+           </property>
+           <layout class="QVBoxLayout" name="seedRowsLayout">
+            <property name="leftMargin">
+             <number>0</number>
+            </property>
+            <property name="topMargin">
+             <number>0</number>
+            </property>
+            <property name="rightMargin">
+             <number>0</number>
+            </property>
+            <property name="bottomMargin">
+             <number>0</number>
+            </property>
+            <property name="spacing">
+             <number>4</number>
+            </property>
+           </layout>
+          </widget>
+         </item>
+         <item>
+          <layout class="QHBoxLayout" name="seedButtonsLayout">
+           <item>
+            <widget class="QPushButton" name="addSeedButton">
+             <property name="text">
+              <string>Add Seed</string>
+             </property>
+             <property name="toolTip">
+              <string>Create a seed line and click start then direction in a viewer. Radius is the line length.</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="clearSeedsButton">
+             <property name="text">
+              <string>Clear Seeds</string>
+             </property>
+             <property name="toolTip">
+              <string>Remove all SeqSeg seed lines from the scene</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="seedButtonsSpacer">
+             <property name="orientation">
+              <enum>Qt::Horizontal</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>1</width>
+               <height>1</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="parametersCollapsibleButton">
+     <property name="text">
+      <string>Segmentation Limits</string>
+     </property>
+     <property name="collapsed">
+      <bool>false</bool>
+     </property>
+     <layout class="QFormLayout" name="formLayout_parameters">
+      <item row="0" column="0">
+       <widget class="QLabel" name="maxStepsLabel">
+        <property name="text">
+         <string>Nr. of Steps:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QSpinBox" name="maxStepsSpinBox">
+        <property name="toolTip">
+         <string>Maximum number of steps for segmentation</string>
+        </property>
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>10000</number>
+        </property>
+        <property name="value">
+         <number>1</number>
+        </property>
+        <property name="SlicerParameterName" stdset="0">
+         <string>maxSteps</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="maxBranchesLabel">
+        <property name="text">
+         <string>Max Branches:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QSpinBox" name="maxBranchesSpinBox">
+        <property name="toolTip">
+         <string>Maximum number of vessel branches to follow, including each seed start. Raised automatically to at least the number of complete seeds so extra seed lines are not ignored.</string>
+        </property>
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>100</number>
+        </property>
+        <property name="value">
+         <number>1</number>
+        </property>
+        <property name="SlicerParameterName" stdset="0">
+         <string>maxBranches</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="maxStepsPerBranchLabel">
+        <property name="text">
+         <string>Max Steps per Branch:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QSpinBox" name="maxStepsPerBranchSpinBox">
+        <property name="toolTip">
+         <string>Maximum number of steps per branch</string>
+        </property>
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>1000</number>
+        </property>
+        <property name="value">
+         <number>20</number>
+        </property>
+        <property name="SlicerParameterName" stdset="0">
+         <string>maxStepsPerBranch</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="nnunetCollapsibleButton">
+     <property name="text">
+      <string>nnUNet Configuration</string>
+     </property>
+     <property name="collapsed">
+      <bool>false</bool>
+     </property>
+     <layout class="QFormLayout" name="formLayout_nnunet">
+      <item row="0" column="0">
+       <widget class="QLabel" name="nnunetTypeLabel">
+        <property name="text">
+         <string>nnUNet Type:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="nnunetTypeComboBox">
+        <property name="toolTip">
+         <string>Type of nnUNet model to use</string>
+        </property>
+        <property name="SlicerParameterName" stdset="0">
+         <string>nnunetType</string>
+        </property>
+        <item>
+         <property name="text">
+          <string>3d_fullres</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>2d</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="trainDatasetLabel">
+        <property name="text">
+         <string>Model Weights:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QComboBox" name="trainDatasetComboBox">
+        <property name="toolTip">
+         <string>Pretrained model to use. If its weights are not already in Slicer's SeqSeg folder, Run SeqSeg asks to download them and then uses that folder. Aorta MR, Aorta CT, and Fontan MR (orig) were trained in cm; Coronary CT was trained in mm. Fontan MR (003) has no automatic download. Match Image Unit (under Inputs) and Scale (below) accordingly. The real nnUNet dataset id is applied automatically when running SeqSeg.</string>
+        </property>
+        <property name="sizeAdjustPolicy">
+         <enum>QComboBox::AdjustToMinimumContentsLengthWithIcon</enum>
+        </property>
+        <property name="minimumContentsLength">
+         <number>12</number>
+        </property>
+        <property name="editable">
+         <bool>false</bool>
+        </property>
+        <item>
+         <property name="text">
+          <string>Aorta MR</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>Aorta CT</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>Coronary CT</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QLabel" name="trainDatasetUnitsHintLabel">
+        <property name="text">
+         <string>Aorta MR, Aorta CT, and Fontan MR (orig) were trained on cm-scale data; Coronary CT was trained on mm-scale data. Set Image Unit under Inputs and Scale below to match your volume and the model.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Ignored" vsizetype="Preferred">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="styleSheet">
+         <string>QLabel { color: palette(shadow); font-size: 11px; }</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="scaleLabel">
+        <property name="text">
+         <string>Scale:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QComboBox" name="scaleComboBox">
+        <property name="toolTip">
+         <string>Relates nnUNet training voxel units to your Image Unit. Use 10 if the model was trained in mm and your volume is in cm; use 0.1 if the model was trained in cm and your volume is in mm; use 1 when training units match the image (default).</string>
+        </property>
+        <property name="currentIndex">
+         <number>1</number>
+        </property>
+        <property name="SlicerParameterName" stdset="0">
+         <string>scale</string>
+        </property>
+        <item>
+         <property name="text">
+          <string>0.1</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>1</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>10</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+      <item row="4" column="0" colspan="2">
+       <widget class="QLabel" name="scaleExplanationLabel">
+        <property name="text">
+         <string>Scale matches nnUNet training units to Image Unit: if the model was trained in mm and the image is in cm, choose 10; if the model was trained in cm and the image is in mm, choose 0.1; if units match, choose 1 (default).</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Ignored" vsizetype="Preferred">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="styleSheet">
+         <string>QLabel { color: palette(shadow); font-size: 11px; }</string>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="0">
+       <widget class="QLabel" name="forceCpuLabel">
+        <property name="text">
+         <string>Device:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="1">
+       <widget class="QCheckBox" name="forceCpuCheckBox">
+        <property name="toolTip">
+         <string>If checked, nnUNet inference runs on the CPU (adds -cpu to the SeqSeg command). Use this when there is no usable GPU, or when GPU runs fail with a CUDA error; inference is slower on the CPU.</string>
+        </property>
+        <property name="text">
+         <string>Force CPU (no GPU)</string>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+        <property name="SlicerParameterName" stdset="0">
+         <string>forceCpu</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="outputCollapsibleButton">
+     <property name="text">
+      <string>Output</string>
+     </property>
+     <layout class="QFormLayout" name="formLayout_output">
+      <item row="0" column="0">
+       <widget class="QLabel" name="outputDirectoryLabel">
+        <property name="text">
+         <string>Output Directory:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="ctkDirectoryButton" name="outputDirectoryButton">
+        <property name="toolTip">
+         <string>Directory for pipeline outputs (SeqSeg data layout). Will contain: images/ (input), seeds.json, output/ (segmentation .mha, surface mesh .vtp files)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="outputSegmentationLabel">
+        <property name="text">
+         <string>Output Segmentation:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="qMRMLNodeComboBox" name="outputSegmentationSelector">
+        <property name="toolTip">
+         <string>Select output segmentation node</string>
+        </property>
+        <property name="nodeTypes">
+         <stringlist notr="true">
+          <string>vtkMRMLSegmentationNode</string>
+         </stringlist>
+        </property>
+        <property name="showChildNodeTypes">
+         <bool>false</bool>
+        </property>
+        <property name="addEnabled">
+         <bool>true</bool>
+        </property>
+        <property name="removeEnabled">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="simvascularLabel">
+        <property name="text">
+         <string>SimVascular Output:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QCheckBox" name="simvascularCheckBox">
+        <property name="toolTip">
+         <string>If checked, SeqSeg writes a SimVascular project layout (simvascular/ dirs with .pth, .ctgr).</string>
+        </property>
+        <property name="text">
+         <string>Generate SimVascular project</string>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+        <property name="SlicerParameterName" stdset="0">
+         <string>simvascular</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0" colspan="2">
+       <widget class="QLabel" name="visualizationLabel">
+        <property name="text">
+         <string>Visualization Results:</string>
+        </property>
+        <property name="font">
+         <font>
+          <weight>75</weight>
+          <bold>true</bold>
+         </font>
+        </property>
+        <property name="styleSheet">
+         <string>QLabel {
+    color: #2E86AB;
+    padding: 8px 0px 4px 0px;
+    border-bottom: 1px solid #E0E0E0;
+    margin-bottom: 5px;
+}</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0" colspan="2">
+       <layout class="QVBoxLayout" name="visualizationButtonsLayout">
+        <item>
+         <layout class="QHBoxLayout" name="primaryVisualizationLayout">
+          <item>
+           <widget class="QPushButton" name="loadSegmentationButton">
+            <property name="text">
+             <string>Load Segmentation</string>
+            </property>
+            <property name="toolTip">
+             <string>Load the latest segmentation (.mha) file as an overlay</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="loadSurfaceMeshButton">
+            <property name="text">
+             <string>Load Surface Mesh</string>
+            </property>
+            <property name="toolTip">
+             <string>Load the latest 3D surface mesh (.vtp) file</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <widget class="QPushButton" name="browseOutputsButton">
+          <property name="text">
+           <string>Browse All Output Files</string>
+          </property>
+          <property name="toolTip">
+           <string>Browse and selectively load all output files from the results directory</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <layout class="QVBoxLayout" name="executeLayout">
+     <item>
+      <widget class="QPushButton" name="applyButton">
+       <property name="enabled">
+        <bool>true</bool>
+       </property>
+       <property name="toolTip">
+        <string>Run vascular segmentation (SeqSeg CLI)</string>
+       </property>
+       <property name="text">
+        <string>Run SeqSeg</string>
+       </property>
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>35</height>
+        </size>
+       </property>
+       <property name="styleSheet">
+        <string>QPushButton {
+    background-color: #4CAF50;
+    color: white;
+    font-weight: bold;
+    border: 2px solid #45a049;
+    border-radius: 4px;
+    padding: 5px;
+}
+QPushButton:hover {
+    background-color: #45a049;
+}
+QPushButton:disabled {
+    background-color: #cccccc;
+    color: #666666;
+    border-color: #999999;
+}</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QLabel" name="statusLabel">
+       <property name="text">
+        <string>Ready to run vessel segmentation</string>
+       </property>
+       <property name="alignment">
+        <set>Qt::AlignCenter</set>
+       </property>
+       <property name="styleSheet">
+        <string>QLabel {
+    color: #666666;
+    font-style: italic;
+    padding: 5px;
+}</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QLabel" name="instructionsLabel">
+     <property name="text">
+      <string>Quick start: load a volume, click Add Seed and place a 2-point line (start then direction; radius is the line length), optionally add more seeds, choose Model Weights under nnUNet Configuration, set the output folder, and Run SeqSeg. If those weights are not installed, Slicer asks to download them into its SeqSeg folder and then runs. Then use Load Segmentation / Load Surface Mesh / Browse All Output Files.
+
+Details: NIfTI is recommended. Image unit (mm/cm) must match your volume and the model (Aorta MR/CT and Fontan MR (orig) were trained in cm; Coronary CT in mm). First run may install dependencies and take longer. Results live under output_directory/output/.</string>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+     <property name="sizePolicy">
+      <sizepolicy hsizetype="Ignored" vsizetype="Preferred">
+       <horstretch>0</horstretch>
+       <verstretch>0</verstretch>
+      </sizepolicy>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignTop</set>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>qMRMLWidget</class>
+   <extends>QWidget</extends>
+   <header>qMRMLWidget.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>qMRMLNodeComboBox</class>
+   <extends>QWidget</extends>
+   <header>qMRMLNodeComboBox.h</header>
+  </customwidget>
+  <customwidget>
+   <class>ctkCollapsibleButton</class>
+   <extends>QWidget</extends>
+   <header>ctkCollapsibleButton.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>ctkDirectoryButton</class>
+   <extends>QWidget</extends>
+   <header>ctkDirectoryButton.h</header>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections>
+  <connection>
+   <sender>seqseg</sender>
+   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+   <receiver>inputSelector</receiver>
+   <slot>setMRMLScene(vtkMRMLScene*)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>200</x>
+     <y>250</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>300</x>
+     <y>50</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>seqseg</sender>
+   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+   <receiver>outputSegmentationSelector</receiver>
+   <slot>setMRMLScene(vtkMRMLScene*)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>200</x>
+     <y>250</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>300</x>
+     <y>170</y>
+    </hint>
+   </hints>
+  </connection>
+ </connections>
+</ui>
