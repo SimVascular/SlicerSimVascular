@@ -9,11 +9,12 @@ CFD case is run with and its defaults.
 - `settings`: every setting, its default, and how a typed value is read.
 - `solver_xml`: the file, built element by element from those and the conditions.
 - `case`: the folder it goes in, and the checks that it refers to files that are there.
+- `trial`: a few steps of it on this machine, and what svMultiPhysics' output says about them.
 
 Nothing here imports `slicer`, `sv` or VMTK.
 """
 
-from svmpsetup import case, settings, solver_xml
+from svmpsetup import case, settings, solver_xml, trial
 from svmpsetup.case import CaseError, CaseResult, check_case, problems, write_case
 from svmpsetup.settings import SETTINGS, SettingError, defaults, resolve
 
@@ -21,6 +22,7 @@ __all__ = [
     "case",
     "settings",
     "solver_xml",
+    "trial",
     "CaseError",
     "CaseResult",
     "SETTINGS",

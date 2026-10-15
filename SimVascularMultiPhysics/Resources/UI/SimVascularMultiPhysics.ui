@@ -195,6 +195,169 @@
     </widget>
    </item>
    <item>
+    <widget class="ctkCollapsibleButton" name="testCollapsibleButton">
+     <property name="text">
+      <string>Test run</string>
+     </property>
+     <property name="collapsed">
+      <bool>true</bool>
+     </property>
+     <layout class="QVBoxLayout" name="testVerticalLayout">
+      <item>
+       <widget class="QLabel" name="testHelpLabel">
+        <property name="text">
+         <string>Run a quick local test to catch errors and verify your svMultiPhysics files before the full simulation. The test is written in its own folder next to the main output folder.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QFormLayout" name="testFormLayout">
+        <item row="0" column="0">
+         <widget class="QLabel" name="solverPathLabel">
+          <property name="text">
+           <string>svMultiPhysics:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="0" column="1">
+         <widget class="ctkPathLineEdit" name="solverPathLineEdit">
+          <property name="toolTip">
+           <string>The svmultiphysics executable, for a build of your own, such as build/svMultiPhysics-build/bin/svmultiphysics. Leave empty to use the one SVMULTIPHYSICS names, the one on the PATH, or the newest the installers put in /usr/local/sv/svMultiPhysics; on Windows, the same inside WSL. Kept for this computer, not with the scene.</string>
+          </property>
+          <property name="filters">
+           <set>ctkPathLineEdit::Files|ctkPathLineEdit::Executable</set>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="1">
+         <widget class="QLabel" name="solverFoundLabel">
+          <property name="text">
+           <string/>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="0">
+         <widget class="QLabel" name="testStepsLabel">
+          <property name="text">
+           <string>Time steps:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="1">
+         <widget class="QSpinBox" name="testStepsSpinBox">
+          <property name="toolTip">
+           <string>How many time steps the test runs. The last is saved, to be shown; the rest of the case is as it will run: the time step, the mesh, the conditions.</string>
+          </property>
+          <property name="minimum">
+           <number>1</number>
+          </property>
+          <property name="maximum">
+           <number>10000</number>
+          </property>
+          <property name="value">
+           <number>5</number>
+          </property>
+         </widget>
+        </item>
+        <item row="3" column="0">
+         <widget class="QLabel" name="testProcessesLabel">
+          <property name="text">
+           <string>Number of Processor(s):</string>
+          </property>
+         </widget>
+        </item>
+        <item row="3" column="1">
+         <widget class="QSpinBox" name="testProcessesSpinBox">
+          <property name="toolTip">
+           <string>How many processors mpiexec runs the test on. Without mpiexec it runs on one. The time per step the test reports is for this many.</string>
+          </property>
+          <property name="minimum">
+           <number>1</number>
+          </property>
+          <property name="maximum">
+           <number>1024</number>
+          </property>
+          <property name="value">
+           <number>8</number>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QPushButton" name="runTestButton">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="text">
+         <string>Run test</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="showTestResultsButton">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="toolTip">
+         <string>Show the test's last step in the 3D view, as arrows along the velocity coloured by speed, and say which way the flow went through each face.</string>
+        </property>
+        <property name="text">
+         <string>Show results</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="testReportLabel">
+        <property name="text">
+         <string/>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+        <property name="textInteractionFlags">
+         <set>Qt::TextSelectableByMouse</set>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="ctkCollapsibleGroupBox" name="testOutputGroupBox">
+        <property name="title">
+         <string>Solver output</string>
+        </property>
+        <property name="collapsed">
+         <bool>true</bool>
+        </property>
+        <layout class="QVBoxLayout" name="testOutputLayout">
+         <item>
+          <widget class="QPlainTextEdit" name="testOutputTextEdit">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>160</height>
+            </size>
+           </property>
+           <property name="readOnly">
+            <bool>true</bool>
+           </property>
+           <property name="lineWrapMode">
+            <enum>QPlainTextEdit::NoWrap</enum>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
     <widget class="QLabel" name="statusLabel">
      <property name="text">
       <string/>
@@ -224,6 +387,12 @@
    <class>ctkCollapsibleButton</class>
    <extends>QWidget</extends>
    <header>ctkCollapsibleButton.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>ctkCollapsibleGroupBox</class>
+   <extends>QGroupBox</extends>
+   <header>ctkCollapsibleGroupBox.h</header>
    <container>1</container>
   </customwidget>
   <customwidget>
