@@ -157,6 +157,10 @@ and nothing else holds a default:
   cycles instead, the steps are 9,091 for the tutorial aorta's 0.909 s cycle. On the aorta, 1 ms is
   CFL 4.7; estimated from CFL 1 the step is 2.1e-4 s, saving every 477, and the 10,000 steps then
   run 2.1 s -- 42,930 for 10 cycles.
+- **Fluid iterations:** `Min_iterations` 3, `Max_iterations` 10 and `Tolerance` 1e-4, the lab's,
+  over the Fontan template's 2, 5 and 1e-3: at those, the test run of the tutorial aorta used all
+  five iterations in three of its first five steps without reaching the tolerance. At these, all
+  five steps converged, at 23 s a step on 8 processes.
 - **Everything else**, for now: the Fontan workflow's `solver_template.xml` (in ClinicalWorkflows),
   without its scalar-transport equation, as a stand-in until the defaults for this panel are
   settled.

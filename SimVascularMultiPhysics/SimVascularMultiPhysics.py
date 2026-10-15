@@ -52,15 +52,22 @@ import time
 # would otherwise import the installed package, of whatever version that is, without a word; and
 # fail on anything the checkout added. Installed, the two folders are one and nothing changes.
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-if sys.path[:1] != [_MODULE_DIR]:
-    sys.path.insert(0, _MODULE_DIR)
+# And, in a checkout, SimVascular ROM Simulation's folder next: the table the conditions are set in,
+# and svromsetup, are there, and the installed copies would otherwise come first for the same
+# reason. Installed, every module is in one folder and there is no such sibling.
+_ROM_DIR = os.path.join(os.path.dirname(_MODULE_DIR), "SimVascularROM")
+for _folder in ([_ROM_DIR] if os.path.isdir(os.path.join(_ROM_DIR, "SimVascularROMLib")) else []) + [_MODULE_DIR]:
+    if _folder in sys.path:
+        sys.path.remove(_folder)
+    sys.path.insert(0, _folder)
 # Reload, in developer mode, runs this file again but not the package it imports, which Python keeps
 # as it was first imported: a panel newer than its package then calls functions that do not take
 # what it passes -- "estimate() got an unexpected keyword argument" -- in every callback, and Reload
 # and Test stops part way, leaving the panel half set. So the package is imported afresh with the
-# file. Only this module's own: svromsetup's classes are shared with the ROM panel's table, and an
-# Inflow made by one copy is not an Inflow to the other.
-for _name in [name for name in sys.modules if name == "svmpsetup" or name.startswith("svmpsetup.")]:
+# file, with the table it shows -- which keeps nothing of its own. Not svromsetup: its classes are
+# shared with the ROM panel, and an Inflow made by one copy is not an Inflow to the other.
+for _name in [name for name in sys.modules
+              if name.split(".")[0] in ("svmpsetup", "SimVascularROMLib")]:
     del sys.modules[_name]
 
 import ctk
@@ -1459,8 +1466,10 @@ class SimVascularMultiPhysicsTest(ScriptedLoadableModuleTest):
             handle.write("0.0 5.0\n0.4 15.0\n0.8 5.0\n")
         table = widget.conditionsTable
         table.chooseWaveformFile = lambda _directory: flow
+        table.reviewWaveform = lambda _waveform, _faceId: False    # positive already: as it is
         table.onCellDoubleClicked(table.rowOf(testing.INLET_ID), VALUES_COLUMN)
         del table.chooseWaveformFile
+        del table.reviewWaveform
 
     def test_aSavingTypedWithTheCFLIsKeptAsTyped(self):
         """Estimated, the saving is adapted to the step; a saving setting typed is the user's, kept

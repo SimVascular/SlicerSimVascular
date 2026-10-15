@@ -128,10 +128,23 @@ the waveforms next to it.
 
 ### Flow files and their sign
 
-A `.flow` file is a time and a flow on each line, over one cycle starting at 0. Here an inflow
-is positive. A file written for svMultiPhysics gives inflow as *negative*, because its flow is
-measured along the outward normal. A loaded waveform whose mean is negative is therefore turned
-round, and the status line says so.
+A `.flow` file is a time and a flow on each line, over one cycle starting at 0; lines starting
+with `#` are skipped. Here an inflow is positive. A file written for svMultiPhysics gives inflow as
+*negative*, because its flow is measured along the outward normal, and one written for a 0D solver
+gives it positive; nothing in the file says which.
+
+So choosing a file opens a window that plots it, every point, as it would be given to the cap,
+with a line at zero and its mean and range under it -- in orange, with a word, when the mean is
+negative. **Negate flow** multiplies every value by -1, and is unticked until you tick it; the
+plot follows the box. **OK** gives the cap the curve shown; **Cancel** leaves it as it was. The
+status line says when a waveform was negated, and when one given to a cap has a negative mean,
+which takes flow out of the model there. The table is the one both panels share, so the choice
+holds for SimVascular MultiPhysics too, which writes the inflow negative again for svMultiPhysics.
+
+Asked rather than guessed. The first version turned round any waveform whose mean was negative,
+which suited every waveform it was tried on and would be wrong, without a word, for one that is
+mostly backflow -- and "turned round" in a status line showed nobody what had been done to their
+numbers.
 
 ## Setting up
 

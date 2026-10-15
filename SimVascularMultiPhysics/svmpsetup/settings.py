@@ -151,9 +151,11 @@ SETTINGS = (
 
     # Add_equation type="fluid".
     Setting("fluid.coupled", FLUID, "Coupled", BOOL, True),
-    Setting("fluid.min_iterations", FLUID, "Min iterations", INT, 2, minimum=1),
-    Setting("fluid.max_iterations", FLUID, "Max iterations", INT, 5, minimum=1),
-    Setting("fluid.tolerance", FLUID, "Tolerance", FLOAT, 1e-3, minimum=0.0),
+    # The lab's (user, 2026-10-15), over the Fontan template's 2, 5 and 1e-3: at those, the test
+    # run of the tutorial aorta used all 5 iterations in three of its first five steps.
+    Setting("fluid.min_iterations", FLUID, "Min iterations", INT, 3, minimum=1),
+    Setting("fluid.max_iterations", FLUID, "Max iterations", INT, 10, minimum=1),
+    Setting("fluid.tolerance", FLUID, "Tolerance", FLOAT, 1e-4, minimum=0.0),
     Setting("fluid.backflow_stabilization_coefficient", FLUID, "Backflow stabilization", FLOAT,
             0.2, "Damps flow re-entering through an outlet, which otherwise grows and stops "
             "the run.", minimum=0.0),

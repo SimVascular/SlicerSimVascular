@@ -313,8 +313,8 @@ def read_flow_file(path) -> Inflow:
 
     As written, sign and all. A file made for svMultiPhysics carries an inflow as *negative* --
     its flow is measured along the outward normal -- and the reduced-order solvers take it as
-    positive. Which one a file is cannot be read off the file, so the caller says so; see
-    `as_inflow`.
+    positive. Which one a file is cannot be read off the file, so the caller says so: the panels
+    plot it and ask, and `as_inflow` guesses from the mean for a script that has to.
     """
     times, flows = [], []
     for number, line in enumerate(Path(path).read_text().splitlines(), start=1):
@@ -336,8 +336,10 @@ def as_inflow(waveform: Inflow):
 
     A waveform whose mean is negative is taken to be one written for svMultiPhysics, where
     inflow is negative, rather than a flow out of the model: an outlet prescribing flow is
-    not something this panel offers. Returned with a flag rather than flipped quietly, so that
-    the panel can say it did.
+    not something the panels offer. Returned with a flag rather than flipped quietly, so that a
+    caller can say it did. Not what the panels do: they plot the waveform and leave negating it to
+    the user (`SimVascularROMLib.BoundaryConditionsTable.WaveformReview`), since a waveform that
+    is mostly backflow has a negative mean too.
     """
     if waveform.mean < 0:
         return waveform.flipped(), True
