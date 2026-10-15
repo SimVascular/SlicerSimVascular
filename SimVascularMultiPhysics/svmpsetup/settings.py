@@ -117,8 +117,9 @@ SETTINGS = (
     Setting("general.number_of_spatial_dimensions", GENERAL, "Spatial dimensions", INT, 3,
             "3 for a vascular model.", minimum=2),
     Setting("general.number_of_time_steps", GENERAL, "Number of time steps", INT, 10000,
-            "10 s of 1 ms steps by default: a dozen cycles at a resting heart rate. For a whole "
-            "number of cycles, make it cycles times steps per cycle.", minimum=1),
+            "The run's length when it is set in steps rather than cardiac cycles: 10 s of 1 ms steps "
+            "by default. For a whole number of cycles, make it cycles times steps per cycle, or set "
+            "the run in cardiac cycles instead.", minimum=1),
     Setting("general.time_step_size", GENERAL, "Time step size", FLOAT, 1e-3,
             "Seconds.", minimum=0.0),
     Setting("general.spectral_radius_of_infinite_time_step", GENERAL,

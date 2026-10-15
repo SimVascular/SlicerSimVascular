@@ -117,6 +117,11 @@ runs unchanged:
   that is, and fails at startup on anything the checkout added. SimVascular MultiPhysics puts its
   own folder first before importing `svmpsetup`; ROM and Mesh Prep do not yet. Check with
   `import svromsetup; print(svromsetup.__file__)`.
+- **Reload re-runs a module file, not the package it imports**, which stays as first imported: a
+  newer panel then calls an older package, fails in every callback, and Reload and Test stops part
+  way with the panel half set. SimVascular MultiPhysics drops `svmpsetup` from `sys.modules` as it
+  loads, so Reload picks up both; ROM and Mesh Prep do not yet -- restart Slicer after changing
+  their packages.
 
 Prefer this to driving a live Slicer over MCP for anything repeatable: a clean scene every run,
 and a crash costs nothing. Running a whole suite through MCP `execute_python` has segfaulted

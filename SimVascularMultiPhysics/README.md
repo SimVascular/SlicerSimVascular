@@ -12,7 +12,13 @@ Simulation sets for that mesh). Everything else has a default and can be changed
   <cap>.flow           each inflow waveform: header, then time and flow, inflow negative
 ```
 
-**Test run** runs a few steps of it on this machine first, in `<output folder>-test` beside it,
+**Number of time steps** is user-defined by default, or calculated from cardiac cycles; **Time step
+size** is user-defined, or estimated from a CFL number (1 recommended), a max velocity and a mesh size
+-- filled in from the fastest inflow and the mesh's mean edge length, and open to typing over --
+rounded to whole steps per cardiac cycle, with the saving kept as often in time as it was, or left as
+you type it.
+
+**Test run** runs a few steps of the case on this machine first, in `<output folder>-test` beside it,
 with the svMultiPhysics the installers put in `/usr/local/sv/svMultiPhysics`, a build of your own,
 or, on Windows, the one in WSL2. It reports the time per step and what the full run will cost, and
 any error in words, and can draw the last step's velocity in the anatomy.
