@@ -114,9 +114,17 @@ runs unchanged:
   of a checkout's: the launcher puts the extension's `qt-scripted-modules` there before any module
   is found, and `--additional-module-paths` does not change that. So a checkout's
   module imports the *installed* `svromsetup`, `svmeshcomplete` or `svmpsetup`, of whatever version
-  that is, and fails at startup on anything the checkout added. SimVascular MultiPhysics puts its
-  own folder first before importing `svmpsetup`; ROM and Mesh Prep do not yet. Check with
-  `import svromsetup; print(svromsetup.__file__)`.
+  that is, and fails at startup on anything the checkout added -- or, worse, runs the installed
+  `SimVascularROMLib` table under a checkout's panel and looks fine. SimVascular ROM Simulation puts
+  its own folder first; SimVascular MultiPhysics puts its own, then (in a checkout) ROM's, for the
+  shared table and `svromsetup`. Mesh Prep does not yet. Check with
+  `import svromsetup, SimVascularROMLib; print(svromsetup.__file__, SimVascularROMLib.__file__)`.
+- **Reload re-runs a module file, not the package it imports**, which stays as first imported: a
+  newer panel then calls an older package, fails in every callback, and Reload and Test stops part
+  way with the panel half set. SimVascular MultiPhysics drops `svmpsetup` and `SimVascularROMLib`
+  from `sys.modules` as it loads, and ROM drops `SimVascularROMLib`, so Reload picks those up.
+  Nothing drops `svromsetup` or `svmeshcomplete`, whose classes both panels hold -- restart Slicer
+  after changing them.
 
 Prefer this to driving a live Slicer over MCP for anything repeatable: a clean scene every run,
 and a crash costs nothing. Running a whole suite through MCP `execute_python` has segfaulted

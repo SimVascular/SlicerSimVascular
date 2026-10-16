@@ -52,8 +52,23 @@ import time
 # would otherwise import the installed package, of whatever version that is, without a word; and
 # fail on anything the checkout added. Installed, the two folders are one and nothing changes.
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-if sys.path[:1] != [_MODULE_DIR]:
-    sys.path.insert(0, _MODULE_DIR)
+# And, in a checkout, SimVascular ROM Simulation's folder next: the table the conditions are set in,
+# and svromsetup, are there, and the installed copies would otherwise come first for the same
+# reason. Installed, every module is in one folder and there is no such sibling.
+_ROM_DIR = os.path.join(os.path.dirname(_MODULE_DIR), "SimVascularROM")
+for _folder in ([_ROM_DIR] if os.path.isdir(os.path.join(_ROM_DIR, "SimVascularROMLib")) else []) + [_MODULE_DIR]:
+    if _folder in sys.path:
+        sys.path.remove(_folder)
+    sys.path.insert(0, _folder)
+# Reload, in developer mode, runs this file again but not the package it imports, which Python keeps
+# as it was first imported: a panel newer than its package then calls functions that do not take
+# what it passes -- "estimate() got an unexpected keyword argument" -- in every callback, and Reload
+# and Test stops part way, leaving the panel half set. So the package is imported afresh with the
+# file, with the table it shows -- which keeps nothing of its own. Not svromsetup: its classes are
+# shared with the ROM panel, and an Inflow made by one copy is not an Inflow to the other.
+for _name in [name for name in sys.modules
+              if name.split(".")[0] in ("svmpsetup", "SimVascularROMLib")]:
+    del sys.modules[_name]
 
 import ctk
 import qt
@@ -71,7 +86,7 @@ from slicer.util import VTKObservationMixin
 import vtk
 
 from svmeshcomplete.face_table import sanitized
-from svmpsetup import case, settings, trial
+from svmpsetup import case, settings, time_step, trial
 from svromsetup import boundary_conditions as bcs
 
 # The faces and the conditions table, shared with SimVascular ROM Simulation.
@@ -92,6 +107,28 @@ from SimVascularROMLib.BoundaryConditionsTable import (  # noqa: F401 (the tests
 INPUT_MESH_REFERENCE = "InputMesh"
 OUTPUT_DIRECTORY_PARAMETER = "OutputDirectory"
 SETTINGS_PARAMETER = "Settings"
+# The CFL number the time step is estimated at: the case's, with the settings, but not one of them --
+# nothing in solver.xml is it.
+CFL_PARAMETER = "CFLNumber"
+# How the run's length is set -- in cardiac cycles, or as a number of time steps -- and how many
+# cycles. Not settings either: in cycles, Number_of_time_steps is what they come to, and that is
+# what is written.
+RUN_LENGTH_PARAMETER = "RunLength"
+CYCLES_PARAMETER = "CardiacCycles"
+RUN_BY_CYCLES, RUN_BY_STEPS = "cycles", "steps"
+# How the time step is set: user-defined, or estimated from the CFL number.
+TIME_STEP_MODE_PARAMETER = "TimeStepMode"
+# A max velocity (cm/s) and a mesh size (mm) typed over the case's, or empty when left to it.
+CFL_VELOCITY_PARAMETER = "CFLMaxVelocity"
+CFL_MESH_SIZE_PARAMETER = "CFLMeshSize"
+# Whether the estimate adapts the saving to the step it sets: "false" once a saving setting is typed,
+# so that a scene opened again keeps the saving as typed rather than adapting it once more.
+CFL_ADAPT_SAVING_PARAMETER = "CFLAdaptSaving"
+STEP_BY_USER, STEP_BY_CFL = "user", "cfl"
+STEPS_KEY = "general.number_of_time_steps"
+TIME_STEP_KEY = "general.time_step_size"
+SAVING_KEYS = ("general.increment_in_saving_vtk_files", "general.start_saving_after_time_step",
+               "general.increment_in_saving_restart_files")
 
 INVALID_COLOR = "#c83c28"
 
@@ -267,9 +304,302 @@ class SimVascularMultiPhysicsWidget(ScriptedLoadableModuleWidget, VTKObservation
                 value=setting.format(setting.default))
             label.toolTip = tip
             field.toolTip = tip
-            groups[setting.section].addRow(label, field)
             self.fields[setting.key] = field
+            # The run's length and its time step each a section of their own, with a choice of how
+            # it is set; every other setting a row.
+            if setting.key == STEPS_KEY:
+                label = self.addStepsSection(groups[setting.section], field, tip)
+            elif setting.key == TIME_STEP_KEY:
+                label = self.addTimeStepSection(groups[setting.section], field, tip)
+            else:
+                groups[setting.section].addRow(label, field)
             self.labels[setting.key] = label
+
+    def addStepsSection(self, form, field, tip):
+        """Number of time steps: user-defined, or calculated from cardiac cycles.
+
+        One or the other, never both: two fields that each set the run's length would disagree the
+        moment either was changed. User-defined by default (the user's choice, 2026-10-15, over the
+        cycles it first defaulted to): the steps are the number typed, 10000, as the case was always
+        written. The cycles are there because a run is read by the cycle -- the last one, or the
+        last few, once the outlets have filled -- and a number of steps is a number of cycles only
+        by arithmetic that has to be redone whenever the time step changes.
+        Calculated, the steps are shown, greyed, and are what solver.xml gets; user-defined, they
+        are typed and the cycles are not used. A steady inflow has no cycle to count, so with one
+        the steps are typed whichever is chosen -- greyed, they would be a number nobody could set.
+        Returns the label a changed value is bolded on.
+        """
+        box = qt.QGroupBox(_("Number of time steps"))
+        grid = qt.QGridLayout(box)
+        self.runLengthGroup = qt.QButtonGroup(box)
+        self.cyclesRadio = qt.QRadioButton(_("Calculate from cardiac cycles:"))
+        self.stepsRadio = qt.QRadioButton(_("User-defined:"))
+        self.stepsRadio.checked = True
+        for button in (self.cyclesRadio, self.stepsRadio):
+            self.runLengthGroup.addButton(button)
+        self.cyclesSpinBox = qt.QSpinBox()
+        self.cyclesSpinBox.minimum = 1
+        self.cyclesSpinBox.maximum = 1000
+        self.cyclesSpinBox.value = time_step.DEFAULT_CYCLES
+        self.cyclesSpinBox.suffix = _(" cycles")
+        self.cyclesTip = _("The number of time steps, worked out from this many cardiac cycles of the "
+                           "inflow waveform and the time step. Changing the number chooses it. "
+                           "{cycles} by default.").format(
+            cycles=time_step.DEFAULT_CYCLES)
+        self.cyclesRadio.toolTip = self.cyclesSpinBox.toolTip = self.cyclesTip
+        self.stepsRadio.toolTip = tip
+        # Why the cycles calculate nothing, when they are chosen and cannot: said, under them, rather
+        # than the box greyed -- greyed, it read as broken.
+        self.cyclesNoteLabel = qt.QLabel()
+        self.cyclesNoteLabel.wordWrap = True
+        self.cyclesNoteLabel.styleSheet = "QLabel { color: #d08000; }"
+        self.cyclesNoteLabel.visible = False
+        # User-defined first, in both sections, so that they read alike, and chosen by default in both.
+        grid.addWidget(self.stepsRadio, 0, 0)
+        grid.addWidget(field, 0, 1)
+        grid.addWidget(self.cyclesRadio, 1, 0)
+        grid.addWidget(self.cyclesSpinBox, 1, 1)
+        grid.addWidget(self.cyclesNoteLabel, 2, 0, 1, 2)
+        form.addRow(box)
+        self.cyclesRadio.connect("toggled(bool)", lambda _checked: self.onTimeSteppingChanged())
+        self.cyclesSpinBox.connect("valueChanged(int)", lambda _value: self.onCyclesTyped())
+        return self.stepsRadio
+
+    def onCyclesTyped(self):
+        """The cycles changed: the run calculated from them, which is what changing them asks for.
+        The box is never greyed for it -- with User-defined chosen, a greyed box the user could not
+        type in read as broken."""
+        if self._updating:
+            return
+        self.setChecked(self.cyclesRadio, True)
+        self.onTimeSteppingChanged()
+
+    def addTimeStepSection(self, form, field, tip):
+        """Time step size: user-defined, or estimated from a CFL number.
+
+        Estimated, the step is the CFL number times a mesh size over a max velocity, both shown
+        under it and filled in from the case when the estimate is chosen: the mesh's mean edge
+        length, and the fastest velocity an inflow imposes. Either can be typed over -- a narrowing
+        faster than the inflow, a finer region than the mean -- and is then bold, and kept as the
+        case changes; one not typed over follows the mesh and the conditions. Use the case's values
+        puts both back. The step is worked out again whenever any of it changes, shown greyed, with
+        how it was found; the saving is kept as often in time as it was, unless a saving setting is
+        typed, which clears Adapt the saving and leaves the saving as typed. The estimate is
+        `svmpsetup.time_step`'s. None of this is a row of `settings`, which is what the writer puts
+        in solver.xml: it is a way of choosing the step, and the step is what is written. Returns
+        the label a changed value is bolded on.
+        """
+        box = qt.QGroupBox(_("Time step size"))
+        grid = qt.QGridLayout(box)
+        self.timeStepGroup = qt.QButtonGroup(box)
+        self.userTimeStepRadio = qt.QRadioButton(_("User-defined:"))
+        self.userTimeStepRadio.checked = True
+        self.cflRadio = qt.QRadioButton(_("Estimate time step from CFL"))
+        for button in (self.userTimeStepRadio, self.cflRadio):
+            self.timeStepGroup.addButton(button)
+        self.userTimeStepRadio.toolTip = tip
+        self.cflRadio.toolTip = _(
+            "The time step that is a CFL number: the mesh size over the max velocity, with the mesh's "
+            "millimetres scaled to the solver's centimetres, rounded down to whole steps per cardiac "
+            "cycle, and the saving kept as often in time as it was unless it is set by hand.")
+        grid.addWidget(self.userTimeStepRadio, 0, 0)
+        grid.addWidget(field, 0, 1)
+        grid.addWidget(self.cflRadio, 1, 0, 1, 2)
+
+        # What the estimate is made from, under it and indented, enabled only when it is chosen.
+        self.cflInputs = qt.QWidget()
+        inputs = qt.QFormLayout(self.cflInputs)
+        inputs.setContentsMargins(24, 0, 0, 0)
+        self.cflSpinBox = qt.QDoubleSpinBox()
+        self.cflSpinBox.decimals = 2
+        self.cflSpinBox.minimum = 0.01
+        self.cflSpinBox.maximum = 100.0
+        self.cflSpinBox.singleStep = 0.1
+        self.cflSpinBox.value = time_step.DEFAULT_CFL
+        self.cflSpinBox.toolTip = _("The Courant number: how many elements the max velocity crosses in "
+                                    "one step. 1 is recommended for svMultiPhysics.")
+        self.velocitySpinBox = qt.QDoubleSpinBox()
+        self.velocitySpinBox.decimals = 2
+        self.velocitySpinBox.minimum = 0.0
+        self.velocitySpinBox.maximum = 1e6
+        self.velocitySpinBox.suffix = " cm/s"
+        self.velocitySpinBox.toolTip = _(
+            "The fastest velocity in the model, in cm/s. Filled in with the fastest an inflow imposes: "
+            "its peak flow, in mL/s, over its cap's area, in mm², twice that on the centreline with the "
+            "Parabolic profile. Type over it for a faster flow the inflow does not show, through a "
+            "narrowing for one.")
+        self.meshSizeSpinBox = qt.QDoubleSpinBox()
+        self.meshSizeSpinBox.decimals = 4
+        self.meshSizeSpinBox.minimum = 0.0
+        self.meshSizeSpinBox.maximum = 1e4
+        self.meshSizeSpinBox.suffix = " mm"
+        self.meshSizeSpinBox.toolTip = _(
+            "The element size the step is for, in mm, as the mesh's coordinates are. Filled in with the "
+            "mesh's mean edge length. Type over it for a region finer than the mean.")
+        self.cflLabel = qt.QLabel(_("CFL number:"))
+        self.velocityLabel = qt.QLabel(_("Max velocity:"))
+        self.meshSizeLabel = qt.QLabel(_("Mesh size:"))
+        for label, spinBox in ((self.cflLabel, self.cflSpinBox), (self.velocityLabel, self.velocitySpinBox),
+                               (self.meshSizeLabel, self.meshSizeSpinBox)):
+            label.toolTip = spinBox.toolTip
+            inputs.addRow(label, spinBox)
+        self.caseValuesButton = qt.QPushButton(_("Use the case's values"))
+        # Always clickable: disabled until something was typed over, it read as broken.
+        self.caseValuesButton.toolTip = _("Fill in the max velocity and the mesh size from the case: "
+                                          "the fastest inflow and the mesh's mean edge length. A value "
+                                          "typed over is replaced.")
+        inputs.addRow(self.caseValuesButton)
+        # The saving the estimate adapts, or leaves as typed: a box rather than each field bolded
+        # when typed over, so that which it is shows, and the adapting can be asked for back.
+        self.adaptSavingCheckBox = qt.QCheckBox(_("Adapt the saving to the time step"))
+        self.adaptSavingCheckBox.checked = True
+        self.adaptSavingCheckBox.toolTip = _(
+            "Save results and restart files as often in time as before, whatever the step, with the "
+            "results at the same points of every cardiac cycle. Type a saving setting under General "
+            "and it is kept as typed instead: this is cleared, and the step only rounded to whole "
+            "steps per cycle.")
+        inputs.addRow(self.adaptSavingCheckBox)
+        self.timeStepEstimateLabel = qt.QLabel()
+        self.timeStepEstimateLabel.wordWrap = True
+        self.timeStepEstimateLabel.setTextInteractionFlags(qt.Qt.TextSelectableByMouse)
+        inputs.addRow(self.timeStepEstimateLabel)
+        grid.addWidget(self.cflInputs, 2, 0, 1, 2)
+        form.addRow(box)
+
+        # Which of the two were typed over, and so are kept as the case changes.
+        self._velocityByHand = False
+        self._meshSizeByHand = False
+        self.cflRadio.connect("toggled(bool)", self.onTimeStepModeChanged)
+        self.cflSpinBox.connect("valueChanged(double)", lambda _value: self.onTimeSteppingChanged())
+        self.velocitySpinBox.connect("valueChanged(double)", lambda _value: self.onCFLInputTyped("velocity"))
+        self.meshSizeSpinBox.connect("valueChanged(double)", lambda _value: self.onCFLInputTyped("meshSize"))
+        self.caseValuesButton.connect("clicked(bool)", lambda _checked: self.useCaseValues())
+        self.adaptSavingCheckBox.connect("toggled(bool)", lambda _checked: self.onTimeSteppingChanged())
+        self._edgeLength = None   # (mesh node id, mesh modified time, mean edge length)
+        return self.userTimeStepRadio
+
+    def onTimeStepModeChanged(self, checked):
+        """The estimate chosen: filled in afresh from the case, whatever was typed before, and the
+        saving adapted to it."""
+        if checked and not self._updating:
+            self._velocityByHand = self._meshSizeByHand = False
+            self.setChecked(self.adaptSavingCheckBox, True)
+        self.onTimeSteppingChanged()
+
+    def onCFLInputTyped(self, which):
+        if self._updating:
+            return
+        if which == "velocity":
+            self._velocityByHand = True
+        else:
+            self._meshSizeByHand = True
+        self.onTimeSteppingChanged()
+
+    def useCaseValues(self):
+        self._velocityByHand = self._meshSizeByHand = False
+        self.onTimeSteppingChanged()
+
+    def setChecked(self, button, checked):
+        wasUpdating, self._updating = self._updating, True
+        try:
+            button.checked = checked
+        finally:
+            self._updating = wasUpdating
+
+    def setSpinBox(self, spinBox, value):
+        wasUpdating, self._updating = self._updating, True
+        try:
+            spinBox.value = value
+        finally:
+            self._updating = wasUpdating
+
+    def runByCycles(self):
+        return bool(self.cyclesRadio.checked)
+
+    def cyclesToRun(self):
+        """The cycles the steps are calculated from, or None when they are user-defined."""
+        return self.cyclesSpinBox.value if self.runByCycles() else None
+
+    def timeStepByCFL(self):
+        return bool(self.cflRadio.checked)
+
+    def hasWaveform(self):
+        return bool(self.conditionsTable) and time_step.has_waveform(self.conditionsTable.conditionsByName())
+
+    def adaptsSaving(self):
+        return self.timeStepByCFL() and bool(self.adaptSavingCheckBox.checked)
+
+    def derived(self, key):
+        """Whether a setting is worked out here, not typed, and so not bolded. The steps and the
+        step are greyed as well; the saving is not, since typing over it is how it is set by hand."""
+        if key == STEPS_KEY:
+            return self.runByCycles() and self.hasWaveform()
+        if key == TIME_STEP_KEY:
+            return self.timeStepByCFL()
+        return key in SAVING_KEYS and self.adaptsSaving()
+
+    def onTimeSteppingChanged(self):
+        if self._updating:
+            return
+        self._filesDirty = True
+        self.updateDerived()
+        self.saveToParameterNode()
+        self.updateButtons()
+
+    def setDerivedValue(self, key, value):
+        """A worked-out value into its field, as if it had been read from it."""
+        self.values[key] = value
+        self.invalid.pop(key, None)
+        wasUpdating, self._updating = self._updating, True
+        try:
+            self.fields[key].text = settings.BY_KEY[key].format(value)
+        finally:
+            self._updating = wasUpdating
+        self.styleSetting(key)
+
+    def updateDerived(self):
+        """The time step from the CFL, then the steps from the cycles, where those are chosen; and
+        which fields can be typed in. In that order: the steps follow the step."""
+        byCFL, byCycles = self.timeStepByCFL(), self.runByCycles()
+        # Greyed as well as read-only: which of the two is being set should show at a glance.
+        for key in (TIME_STEP_KEY, STEPS_KEY):
+            derived = self.derived(key)
+            self.fields[key].readOnly = derived
+            self.fields[key].enabled = not derived
+        self.cflInputs.enabled = byCFL
+        self.cflInputs.visible = byCFL
+        if byCFL:
+            self.updateTimeStepFromCFL()
+        self.updateStepsFromCycles()
+        for key in (TIME_STEP_KEY, STEPS_KEY) + SAVING_KEYS:
+            self.styleSetting(key)
+
+    def updateStepsFromCycles(self):
+        """Number of time steps from the cardiac cycles, when it is calculated from them."""
+        self.cyclesNoteLabel.visible = False
+        if not self.runByCycles():
+            return
+        conditions = self.conditionsTable.conditionsByName() if self.conditionsTable else {}
+        step = self.values.get(TIME_STEP_KEY)
+        steps = (time_step.steps_for_cycles(self.cyclesSpinBox.value, conditions, step)
+                 if TIME_STEP_KEY not in self.invalid else None)
+        if steps is None:
+            # No cycle to count, or no step to count it in: the steps as they stand, and said why.
+            if TIME_STEP_KEY in self.invalid:
+                note = _("The time step does not read, so no steps can be calculated from the cycles.")
+            elif not self.conditionsTable or not self.conditionsTable.caps:
+                note = _("Select a mesh with an inflow waveform to calculate the steps from its cycles.")
+            else:
+                note = _("The inflow is steady, with no cardiac cycle to count: the run is the number "
+                         "of time steps typed above.")
+            self.cyclesNoteLabel.text = note
+            self.cyclesNoteLabel.visible = True
+            return
+        self.setDerivedValue(STEPS_KEY, steps)
+
+    def showEstimate(self, text, warning=False):
+        self.timeStepEstimateLabel.text = text
+        self.timeStepEstimateLabel.styleSheet = "QLabel { color: #d08000; }" if warning else ""
 
     def fieldText(self, key):
         field = self.fields[key]
@@ -302,7 +632,8 @@ class SimVascularMultiPhysicsWidget(ScriptedLoadableModuleWidget, VTKObservation
         setting = settings.BY_KEY[key]
         label, field = self.labels[key], self.fields[key]
         font = label.font
-        font.setBold(key not in self.invalid and self.values[key] != setting.default)
+        font.setBold(key not in self.invalid and self.values[key] != setting.default
+                     and not self.derived(key))
         label.font = font
         if key in self.invalid:
             field.styleSheet = f"color: {INVALID_COLOR};"
@@ -315,13 +646,21 @@ class SimVascularMultiPhysicsWidget(ScriptedLoadableModuleWidget, VTKObservation
         if self._updating:
             return
         text = self.fieldText(key)
+        before = self.values.get(key)
         try:
             self.values[key] = settings.BY_KEY[key].parse(text)
             self.invalid.pop(key, None)
         except settings.SettingError as error:
             self.invalid[key] = (text, str(error))
         self._filesDirty = True
+        # A saving setting typed while the estimate adapts the saving: the user's from now on, kept
+        # as typed. Only one changed -- a field left without a change finishes its editing too.
+        if (key in SAVING_KEYS and self.adaptsSaving()
+                and (key in self.invalid or self.values[key] != before)):
+            self.setChecked(self.adaptSavingCheckBox, False)
         self.styleSetting(key)
+        if key in (TIME_STEP_KEY, "bc.inflow_profile", "bc.impose_flux", "mesh.scale_factor") + SAVING_KEYS:
+            self.updateDerived()
         self.saveToParameterNode()
         self.updateButtons()
 
@@ -329,7 +668,18 @@ class SimVascularMultiPhysicsWidget(ScriptedLoadableModuleWidget, VTKObservation
         self.values = settings.defaults()
         self.invalid = {}
         self._filesDirty = True
+        wasUpdating, self._updating = self._updating, True
+        try:
+            self.stepsRadio.checked = True
+            self.cyclesSpinBox.value = time_step.DEFAULT_CYCLES
+            self.userTimeStepRadio.checked = True
+            self.cflSpinBox.value = time_step.DEFAULT_CFL
+            self._velocityByHand = self._meshSizeByHand = False
+            self.adaptSavingCheckBox.checked = True
+        finally:
+            self._updating = wasUpdating
         self.showSettings()
+        self.updateDerived()
         self.saveToParameterNode()
         self.updateButtons()
 
@@ -355,6 +705,31 @@ class SimVascularMultiPhysicsWidget(ScriptedLoadableModuleWidget, VTKObservation
                     self.values[key] = settings.BY_KEY[key].parse(value)
                 except settings.SettingError:
                     logging.warning("SimVascular MultiPhysics could not read the saved %s.", key)
+            try:
+                self.cflSpinBox.value = float(node.GetParameter(CFL_PARAMETER) or time_step.DEFAULT_CFL)
+            except ValueError:
+                self.cflSpinBox.value = time_step.DEFAULT_CFL
+            # Set in cycles only when it was saved so; a scene from before the run could be set in
+            # cycles has its steps user-defined, as they were written.
+            runLength = node.GetParameter(RUN_LENGTH_PARAMETER)
+            (self.cyclesRadio if runLength == RUN_BY_CYCLES else self.stepsRadio).checked = True
+            byCFL = node.GetParameter(TIME_STEP_MODE_PARAMETER) == STEP_BY_CFL
+            (self.cflRadio if byCFL else self.userTimeStepRadio).checked = True
+            self.adaptSavingCheckBox.checked = node.GetParameter(CFL_ADAPT_SAVING_PARAMETER) != "false"
+            self._velocityByHand = self._meshSizeByHand = False
+            for parameter, spinBox, flag in ((CFL_VELOCITY_PARAMETER, self.velocitySpinBox, "_velocityByHand"),
+                                             (CFL_MESH_SIZE_PARAMETER, self.meshSizeSpinBox, "_meshSizeByHand")):
+                try:
+                    typed = float(node.GetParameter(parameter) or "nan")
+                except ValueError:
+                    typed = float("nan")
+                if typed == typed:     # not NaN: it was typed over
+                    spinBox.value = typed
+                    setattr(self, flag, True)
+            try:
+                self.cyclesSpinBox.value = int(node.GetParameter(CYCLES_PARAMETER) or time_step.DEFAULT_CYCLES)
+            except ValueError:
+                self.cyclesSpinBox.value = time_step.DEFAULT_CYCLES
             mesh = node.GetNodeReference(INPUT_MESH_REFERENCE)
             if mesh is not None:
                 wasBlocked = self.ui.inputMeshSelector.blockSignals(True)
@@ -364,6 +739,7 @@ class SimVascularMultiPhysicsWidget(ScriptedLoadableModuleWidget, VTKObservation
             self._updating = False
         self.showSettings()
         self.onMeshChanged()
+        self.updateDerived()
         # A scene opened is taken to have the files it was written with: a test runs on them as
         # they are, until something here is changed.
         self._filesDirty = False
@@ -377,6 +753,14 @@ class SimVascularMultiPhysicsWidget(ScriptedLoadableModuleWidget, VTKObservation
         changed = {key: value for key, value in self.values.items()
                    if value != settings.BY_KEY[key].default}
         node.SetParameter(SETTINGS_PARAMETER, json.dumps(changed, sort_keys=True))
+        node.SetParameter(CFL_PARAMETER, repr(float(self.cflSpinBox.value)))
+        # Only what was typed over: one left to the case is worked out again from it on opening.
+        node.SetParameter(CFL_VELOCITY_PARAMETER, repr(float(self.velocitySpinBox.value)) if self._velocityByHand else "")
+        node.SetParameter(CFL_MESH_SIZE_PARAMETER, repr(float(self.meshSizeSpinBox.value)) if self._meshSizeByHand else "")
+        node.SetParameter(RUN_LENGTH_PARAMETER, RUN_BY_CYCLES if self.runByCycles() else RUN_BY_STEPS)
+        node.SetParameter(TIME_STEP_MODE_PARAMETER, STEP_BY_CFL if self.timeStepByCFL() else STEP_BY_USER)
+        node.SetParameter(CFL_ADAPT_SAVING_PARAMETER, "true" if self.adaptSavingCheckBox.checked else "false")
+        node.SetParameter(CYCLES_PARAMETER, str(self.cyclesSpinBox.value))
         node.SetNodeReferenceID(INPUT_MESH_REFERENCE, self.ui.inputMeshSelector.currentNodeID or None)
         node.EndModify(wasModifying)
 
@@ -393,6 +777,7 @@ class SimVascularMultiPhysicsWidget(ScriptedLoadableModuleWidget, VTKObservation
         self.ui.openMeshPrepButton.visible = False
         node = self.ui.inputMeshSelector.currentNode()
         self._filesDirty = True
+        self.showEstimate("")
         self.saveToParameterNode()
         if node is None or node.GetMesh() is None:
             self.ui.meshStatusLabel.text = ""
@@ -415,10 +800,101 @@ class SimVascularMultiPhysicsWidget(ScriptedLoadableModuleWidget, VTKObservation
         self.conditionsTable.setMesh(node if named else None, self.namedFaces if named else None)
         if named and not self.ui.outputDirectoryPathLineEdit.currentPath:
             self.ui.outputDirectoryPathLineEdit.currentPath = self.logic.suggestedOutputDirectory(node)
+        # The mesh brings its size and its conditions, and with them the cycle a run is counted in.
+        self.updateDerived()
+        self.saveToParameterNode()
         self.updateButtons()
+
+    # -- the time step from the CFL ---------------------------------------------------------
+    def meanEdgeLength(self, node):
+        """The mesh's mean edge length, in mm: measured once per mesh and change, a second or two
+        on a million elements."""
+        key = (node.GetID(), node.GetMesh().GetMTime())
+        if self._edgeLength is None or self._edgeLength[:2] != key:
+            self._edgeLength = key + (time_step.mean_edge_length(node.GetMesh()),)
+        return self._edgeLength[2]
+
+    def updateTimeStepFromCFL(self):
+        """Time step size from the CFL number, the max velocity and the mesh size, and the saving
+        kept in time with it; or, where the case does not yet say enough, why not, under it.
+
+        The two that come from the case are worked out first, and put in their fields unless they
+        were typed over. The estimate uses the worked-out values themselves, not their fields'
+        rounding of them; a value typed over is used as typed. Worked out as the panel changes, so
+        anything missing is said rather than raised.
+        """
+        node = self.ui.inputMeshSelector.currentNode()
+        read = [key for key in (STEPS_KEY, "general.increment_in_saving_vtk_files",
+                                "general.start_saving_after_time_step",
+                                "general.increment_in_saving_restart_files",
+                                "mesh.scale_factor", "bc.inflow_profile", "bc.impose_flux")
+                if key in self.invalid]
+        if read:
+            self.showEstimate(" ".join(self.invalid[key][1] for key in read), warning=True)
+            return None
+        values = settings.resolve(self.values)
+        conditions = self.conditionsTable.conditionsByName() if self.conditionsTable else {}
+        named = node is not None and node.GetMesh() is not None and bool(self.conditionsTable.caps)
+        areas = {name: geometry.area for _faceId, name, geometry in self.conditionsTable.caps} if named else {}
+
+        # The case's own: the mesh's mean edge length, and the fastest velocity an inflow imposes.
+        caseEdge = caseVelocity = None
+        missing = []
+        if named:
+            try:
+                with slicer.util.WaitCursor():
+                    caseEdge = self.meanEdgeLength(node)
+            except time_step.EstimateError as error:
+                missing.append(str(error))
+            try:
+                if values["bc.impose_flux"]:
+                    caseVelocity = time_step.fastest_inflow(conditions, areas, values["bc.inflow_profile"],
+                                                            values["mesh.scale_factor"]).peak_velocity
+                else:
+                    missing.append(_("With Impose flux off, an inflow's values are velocities, not flows, "
+                                     "and give no max velocity: type one."))
+            except time_step.EstimateError as error:
+                missing.append(str(error))
+        else:
+            missing.append(_("Select a volume mesh whose faces are named."))
+        if not self._meshSizeByHand and caseEdge is not None:
+            self.setSpinBox(self.meshSizeSpinBox, caseEdge)
+        if not self._velocityByHand and caseVelocity is not None:
+            self.setSpinBox(self.velocitySpinBox, caseVelocity)
+        for label, byHand in ((self.velocityLabel, self._velocityByHand), (self.meshSizeLabel, self._meshSizeByHand)):
+            font = label.font
+            font.setBold(byHand)
+            label.font = font
+
+        edge = self.meshSizeSpinBox.value if self._meshSizeByHand else caseEdge
+        velocity = self.velocitySpinBox.value if self._velocityByHand else caseVelocity
+        if edge is None or velocity is None:
+            self.showEstimate(" ".join(missing) or _("There is no mesh size or max velocity to estimate from."),
+                              warning=True)
+            return None
+        try:
+            found = time_step.estimate(self.cflSpinBox.value, edge, conditions, areas, values,
+                                       cycles=self.cyclesToRun(),
+                                       velocity=velocity if self._velocityByHand else None,
+                                       mesh_edge_length=caseEdge,
+                                       adapt_saving=bool(self.adaptSavingCheckBox.checked))
+        except (time_step.EstimateError, settings.SettingError) as error:
+            self.showEstimate(str(error), warning=True)
+            return None
+        self.setDerivedValue(TIME_STEP_KEY, found.time_step)
+        # The saving, kept as it was in time: counted in steps, it would otherwise save as many
+        # times more results as the step is shorter. Set by hand, it is left as it is.
+        if found.saving_adapted:
+            for key, value in zip(SAVING_KEYS, (found.saving.results_every, found.saving.start_after,
+                                                found.saving.restart_every)):
+                self.setDerivedValue(key, value)
+        self.showEstimate(time_step.describe(found))
+        return found
 
     def onConditionsChanged(self):
         self._filesDirty = True
+        self.updateDerived()
+        self.saveToParameterNode()
         self.updateButtons()
 
     def onOpenMeshPrep(self):
@@ -800,6 +1276,12 @@ class SimVascularMultiPhysicsTest(ScriptedLoadableModuleTest):
         self.setUp()
         self.test_theSolverFilesAreWritten()
         self.setUp()
+        self.test_aTimeStepIsEstimatedFromTheCFL()
+        self.setUp()
+        self.test_aSavingTypedWithTheCFLIsKeptAsTyped()
+        self.setUp()
+        self.test_aRunIsSetInCardiacCyclesOrInSteps()
+        self.setUp()
         self.test_aSolverAskedForAndNotThereIsSaidSo()
         self.setUp()
         self.test_aTestRunStepsTheCaseAndSaysWhichWayItFlows()
@@ -820,6 +1302,7 @@ class SimVascularMultiPhysicsTest(ScriptedLoadableModuleTest):
         # The widget outlives the scene, so what an earlier test left on it is reset here.
         widget.ui.outputDirectoryPathLineEdit.currentPath = ""
         widget.ui.solverPathLineEdit.currentPath = ""
+        widget.cflSpinBox.value = time_step.DEFAULT_CFL
         widget.onResetSettings()
         return widget
 
@@ -904,6 +1387,181 @@ class SimVascularMultiPhysicsTest(ScriptedLoadableModuleTest):
         self.typeCondition(widget.conditionsTable, testing.INLET_ID, bcs.INFLOW, "10")
         self.typeCondition(widget.conditionsTable, testing.OUTLET_ID, bcs.RCR_KIND, "121, 1.5e-4, 1212")
         return directory
+
+    def test_aTimeStepIsEstimatedFromTheCFL(self):
+        """Chosen, the time step is the CFL's -- from the inflow in mL/s over its cap in mm^2 and the
+        mesh's edges in mm, as the package works it out -- shown greyed, and the saving with it;
+        chosen back, the step is the user's to type again."""
+        widget = self.widget()
+        self.readyCube(widget)
+        # On screen, as a user has it, so that its buttons can be pressed: the module shown, and
+        # CFD Simulation and its General group open.
+        slicer.util.selectModule("SimVascularMultiPhysics")
+        widget.ui.simulationCollapsibleButton.collapsed = False
+        for group in widget.ui.settingsContainer.findChildren(ctk.ctkCollapsibleGroupBox):
+            group.collapsed = group.title != settings.GENERAL
+        self.assertFalse(widget.timeStepByCFL(), "user-defined by default")
+        self.assertTrue(widget.cflInputs.isHidden(), "the estimate's inputs only when it is chosen")
+        mesh = widget.ui.inputMeshSelector.currentNode().GetMesh()
+        areas = {name: geometry.area for _faceId, name, geometry in widget.conditionsTable.caps}
+        expected = time_step.estimate(1.0, time_step.mean_edge_length(mesh),
+                                      widget.conditionsTable.conditionsByName(), areas,
+                                      settings.resolve(settings.defaults()),
+                                      cycles=widget.cyclesToRun())
+        widget.cflRadio.checked = True
+        self.assertAlmostEqual(widget.values[TIME_STEP_KEY], expected.time_step)
+        self.assertEqual(widget.values["general.increment_in_saving_vtk_files"], expected.saving.results_every)
+        self.assertEqual(widget.values["general.increment_in_saving_restart_files"], expected.saving.restart_every)
+        self.assertTrue(widget.fields[TIME_STEP_KEY].readOnly)
+        self.assertFalse(widget.labels[TIME_STEP_KEY].font.bold(), "a worked-out value is not bolded")
+        text = widget.timeStepEstimateLabel.text
+        self.assertIn("mL/s", text)
+        self.assertIn("mm²", text)
+        parameters = widget.logic.getParameterNode()
+        self.assertEqual(parameters.GetParameter(TIME_STEP_MODE_PARAMETER), STEP_BY_CFL)
+        saved = json.loads(parameters.GetParameter(SETTINGS_PARAMETER))
+        self.assertAlmostEqual(saved[TIME_STEP_KEY], expected.time_step)
+
+        # Filled in from the case, and not bold: nobody typed them.
+        self.assertAlmostEqual(widget.velocitySpinBox.value, expected.velocity, places=2)
+        self.assertAlmostEqual(widget.meshSizeSpinBox.value, time_step.mean_edge_length(mesh), places=4)
+        self.assertFalse(widget.velocityLabel.font.bold())
+        self.assertTrue(widget.caseValuesButton.enabled, "always clickable, typed over or not")
+
+        # A max velocity typed over the case's is used, bold, and kept; the case's comes back on asking.
+        widget.velocitySpinBox.value = 2 * expected.velocity
+        typed = time_step.estimate(1.0, time_step.mean_edge_length(mesh),
+                                   widget.conditionsTable.conditionsByName(), areas,
+                                   settings.resolve(widget.values), cycles=widget.cyclesToRun(),
+                                   velocity=2 * expected.velocity)
+        self.assertAlmostEqual(widget.values[TIME_STEP_KEY], typed.time_step)
+        self.assertTrue(widget.velocityLabel.font.bold())
+        self.assertIn("set by hand", widget.timeStepEstimateLabel.text)
+        self.assertNotEqual(parameters.GetParameter(CFL_VELOCITY_PARAMETER), "")
+        widget.caseValuesButton.click()
+        self.assertAlmostEqual(widget.values[TIME_STEP_KEY], expected.time_step)
+        self.assertFalse(widget.velocityLabel.font.bold())
+        self.assertEqual(widget.logic.getParameterNode().GetParameter(CFL_VELOCITY_PARAMETER), "")
+
+        widget.cflSpinBox.value = 0.5
+        half = time_step.estimate(0.5, time_step.mean_edge_length(mesh),
+                                  widget.conditionsTable.conditionsByName(), areas,
+                                  settings.resolve(widget.values), cycles=widget.cyclesToRun())
+        self.assertAlmostEqual(widget.values[TIME_STEP_KEY], half.time_step,
+                               msg="the CFL changed, the step worked out again")
+        self.assertLess(widget.values[TIME_STEP_KEY], expected.time_step)
+        widget.userTimeStepRadio.checked = True
+        self.assertFalse(widget.fields[TIME_STEP_KEY].readOnly)
+        self.assertTrue(widget.cflInputs.isHidden(), "the estimate's inputs only when it is chosen")
+        self.delayDisplay("The time step is estimated from the CFL, or typed")
+
+    def giveTheInletAWaveform(self, widget):
+        """A 0.8 s waveform through the cube's inlet, chosen as a user chooses its file."""
+        import tempfile
+
+        from svmeshcomplete import testing
+
+        flow = os.path.join(tempfile.mkdtemp(), "cap_inlet.flow")
+        with open(flow, "w") as handle:
+            handle.write("0.0 5.0\n0.4 15.0\n0.8 5.0\n")
+        table = widget.conditionsTable
+        table.chooseWaveformFile = lambda _directory: flow
+        table.reviewWaveform = lambda _waveform, _faceId: False    # positive already: as it is
+        table.onCellDoubleClicked(table.rowOf(testing.INLET_ID), VALUES_COLUMN)
+        del table.chooseWaveformFile
+        del table.reviewWaveform
+
+    def test_aSavingTypedWithTheCFLIsKeptAsTyped(self):
+        """Estimated, the saving is adapted to the step; a saving setting typed is the user's, kept
+        in steps as typed as the step changes and when the scene is opened again, until the
+        adapting is asked for back."""
+        widget = self.widget()
+        self.readyCube(widget)
+        self.giveTheInletAWaveform(widget)
+        widget.cflRadio.checked = True
+        self.assertTrue(widget.adaptSavingCheckBox.checked, "adapted by default")
+        results = "general.increment_in_saving_vtk_files"
+        self.assertFalse(widget.labels[results].font.bold(), "adapted, the saving is not the user's")
+
+        mesh = widget.ui.inputMeshSelector.currentNode().GetMesh()
+        areas = {name: geometry.area for _faceId, name, geometry in widget.conditionsTable.caps}
+
+        def expected(cfl, adapt):
+            return time_step.estimate(cfl, time_step.mean_edge_length(mesh),
+                                      widget.conditionsTable.conditionsByName(), areas,
+                                      settings.resolve(widget.values), cycles=widget.cyclesToRun(),
+                                      adapt_saving=adapt)
+
+        widget.fields[results].text = "7"
+        widget.onSettingEdited(results)
+        self.assertFalse(widget.adaptSavingCheckBox.checked, "typed: no longer adapted")
+        self.assertTrue(widget.labels[results].font.bold())
+        restart = widget.values["general.increment_in_saving_restart_files"]
+        widget.cflSpinBox.value = 0.5
+        self.assertEqual(widget.values[results], 7, "kept in steps as the step changes")
+        self.assertEqual(widget.values["general.increment_in_saving_restart_files"], restart)
+        self.assertAlmostEqual(widget.values[TIME_STEP_KEY], expected(0.5, False).time_step,
+                               msg="the step made whole per cycle, with no saving to fit")
+        self.assertIn("The saving is as set: results every 7 steps", widget.timeStepEstimateLabel.text)
+        parameters = widget.logic.getParameterNode()
+        self.assertEqual(parameters.GetParameter(CFL_ADAPT_SAVING_PARAMETER), "false")
+        widget.restoreFromParameterNode()
+        self.assertFalse(widget.adaptSavingCheckBox.checked)
+        self.assertEqual(widget.values[results], 7, "and as typed when the scene is opened again")
+
+        adapted = expected(0.5, True)
+        widget.adaptSavingCheckBox.checked = True
+        self.assertEqual(widget.values[results], adapted.saving.results_every)
+        self.assertAlmostEqual(widget.values[TIME_STEP_KEY], adapted.time_step)
+        widget.fields[results].text = "7"
+        widget.onSettingEdited(results)
+        widget.userTimeStepRadio.checked = True
+        widget.cflRadio.checked = True
+        self.assertTrue(widget.adaptSavingCheckBox.checked, "chosen again, the estimate starts afresh")
+        widget.userTimeStepRadio.checked = True
+        self.delayDisplay("A saving typed with the CFL is kept as typed")
+
+    def test_aRunIsSetInCardiacCyclesOrInSteps(self):
+        """The steps typed by default; or ten cycles of the waveform, chosen, as steps that follow
+        the time step; and typed whichever is chosen when the inflow is steady, with no cycle to
+        count."""
+        widget = self.widget()
+        self.readyCube(widget)
+        self.assertFalse(widget.runByCycles(), "user-defined by default")
+        self.assertEqual(widget.values[STEPS_KEY], 10000)
+        self.assertFalse(widget.fields[STEPS_KEY].readOnly)
+        widget.cyclesRadio.checked = True
+        self.assertFalse(widget.fields[STEPS_KEY].readOnly,
+                         "a steady inflow has no cycle to count: its steps are typed, cycles or not")
+        self.assertTrue(widget.cyclesSpinBox.enabled, "never greyed: it says why instead")
+        self.assertFalse(widget.cyclesNoteLabel.isHidden())
+        self.assertIn("steady", widget.cyclesNoteLabel.text)
+        self.giveTheInletAWaveform(widget)
+        self.assertTrue(widget.cyclesNoteLabel.isHidden())
+        self.assertEqual(widget.cyclesSpinBox.value, time_step.DEFAULT_CYCLES)
+        self.assertEqual(widget.values[STEPS_KEY], 8000, "10 cycles of 0.8 s at 1 ms")
+        self.assertTrue(widget.fields[STEPS_KEY].readOnly)
+
+        field = widget.fields["general.time_step_size"]
+        field.text = "2e-3"
+        widget.onSettingEdited("general.time_step_size")
+        self.assertEqual(widget.values[STEPS_KEY], 4000, "the steps follow the time step")
+
+        widget.stepsRadio.checked = True
+        self.assertFalse(widget.fields[STEPS_KEY].readOnly)
+        widget.fields[STEPS_KEY].text = "500"
+        widget.onSettingEdited(STEPS_KEY)
+        self.assertEqual(widget.values[STEPS_KEY], 500)
+        parameters = widget.logic.getParameterNode()
+        self.assertEqual(parameters.GetParameter(RUN_LENGTH_PARAMETER), RUN_BY_STEPS)
+        widget.cyclesRadio.checked = True
+        self.assertEqual(widget.values[STEPS_KEY], 4000)
+        # Changing the cycles with the steps user-defined chooses the cycles.
+        widget.stepsRadio.checked = True
+        widget.cyclesSpinBox.value = 5
+        self.assertTrue(widget.runByCycles())
+        self.assertEqual(widget.values[STEPS_KEY], 2000, "5 cycles of 0.8 s at 2 ms")
+        self.delayDisplay("A run is set in cardiac cycles, or in steps")
 
     def test_aSolverAskedForAndNotThereIsSaidSo(self):
         """Not quietly replaced by another build: a test passed by the wrong one tests nothing."""

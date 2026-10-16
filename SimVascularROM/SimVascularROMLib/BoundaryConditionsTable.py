@@ -17,8 +17,10 @@ import json
 import logging
 import os
 
+import ctk
 import qt
 import slicer
+import vtk
 from slicer.i18n import tr as _
 
 from svmeshcomplete import faces
@@ -51,6 +53,114 @@ KIND_CHOICES = (None,) + bcs.KINDS
 NO_CONDITION_TEXT = "-"
 
 INVALID_VALUES_COLOR = qt.QColor(200, 60, 40)
+WAVEFORM_COLOR = (31, 94, 160)
+WARNING_COLOR = "#d08000"
+
+
+class WaveformReview:
+    """A waveform file's flow, plotted point by point before it is given to a cap, with the choice
+    of negating it.
+
+    Asked, not guessed. A file written for svMultiPhysics stores an inflow negative, its flow
+    measured along the cap's outward normal, and one written for a 0D solver stores it positive;
+    nothing in the file says which. The table used to turn round any waveform whose mean was
+    negative, which suited every class file and would be wrong, without a word, for a waveform
+    that is mostly backflow -- and "turned round" in a status line showed nobody what had been done
+    to their numbers. So the curve is shown, every point of it, and negating is the user's choice:
+    unticked until they make it, the file's numbers as they are.
+    """
+
+    def __init__(self, waveform, capName, parent=None):
+        self.waveform = waveform
+        self.dialog = qt.QDialog(parent or slicer.util.mainWindow())
+        self.dialog.setWindowTitle(_("Inflow waveform for {name}").format(name=capName))
+        layout = qt.QVBoxLayout(self.dialog)
+        intro = qt.QLabel(_(
+            "{file}: every point in the file, as it would be given to {name}. Here an inflow is "
+            "positive, into the model; a file written for svMultiPhysics stores it negative. "
+            "Negate it if the curve is upside down.").format(
+            file=os.path.basename(waveform.source) or _("The waveform"), name=capName))
+        intro.wordWrap = True
+        layout.addWidget(intro)
+        self.chartView = ctk.ctkVTKChartView()
+        self.chartView.minimumSize = qt.QSize(620, 340)
+        layout.addWidget(self.chartView)
+        self.summaryLabel = qt.QLabel()
+        self.summaryLabel.wordWrap = True
+        layout.addWidget(self.summaryLabel)
+        self.negateCheckBox = qt.QCheckBox(_("Negate flow (multiply every value by -1)"))
+        self.negateCheckBox.checked = False
+        layout.addWidget(self.negateCheckBox)
+        # Added one by one: given Ok | Cancel, PythonQt picks another constructor, and the box
+        # comes up empty -- no way to answer but closing the window.
+        buttons = qt.QDialogButtonBox()
+        buttons.addButton(qt.QDialogButtonBox.Ok)
+        buttons.addButton(qt.QDialogButtonBox.Cancel)
+        buttons.connect("accepted()", self.dialog.accept)
+        buttons.connect("rejected()", self.dialog.reject)
+        layout.addWidget(buttons)
+
+        # The curve, and a line at zero to read its sign against. Kept on the instance: the chart
+        # holds its plots and tables only weakly from Python's side.
+        self._curve, self._zero = vtk.vtkTable(), vtk.vtkTable()
+        for table in (self._curve, self._zero):
+            for name in ("time (s)", "flow (mL/s)"):
+                column = vtk.vtkDoubleArray()
+                column.SetName(name)
+                table.AddColumn(column)
+        self._zeroPlot = vtk.vtkPlotLine()
+        self._zeroPlot.SetInputData(self._zero, 0, 1)
+        self._zeroPlot.SetColor(150, 150, 150, 255)
+        self._zeroPlot.SetWidth(1.0)
+        self._linePlot = vtk.vtkPlotLine()
+        self._linePlot.SetInputData(self._curve, 0, 1)
+        self._linePlot.SetColor(*WAVEFORM_COLOR, 255)
+        self._linePlot.SetWidth(1.5)
+        self._linePlot.SetMarkerStyle(vtk.vtkPlotPoints.CIRCLE)
+        self._linePlot.SetMarkerSize(4.0 if len(waveform.time) <= 400 else 2.0)
+        chart = self.chartView.chart()
+        chart.AddPlot(self._zeroPlot)
+        chart.AddPlot(self._linePlot)
+        chart.GetAxis(vtk.vtkAxis.BOTTOM).SetTitle(_("time (s)"))
+        chart.GetAxis(vtk.vtkAxis.LEFT).SetTitle(_("flow (mL/s)"))
+        chart.SetShowLegend(False)
+        self.negateCheckBox.connect("toggled(bool)", lambda _checked: self.plot())
+        self.plot()
+        # Sized to what it holds: left to its default, the buttons fell below its bottom edge.
+        self.dialog.adjustSize()
+
+    def given(self):
+        """The waveform as it would be given to the cap: the file's, negated if that is ticked."""
+        return self.waveform.flipped() if self.negateCheckBox.checked else self.waveform
+
+    def plot(self):
+        waveform = self.given()
+        for table, times, flows in ((self._curve, waveform.time, waveform.flow),
+                                    (self._zero, (0.0, waveform.period), (0.0, 0.0))):
+            table.SetNumberOfRows(len(times))
+            for row, (time, flow) in enumerate(zip(times, flows)):
+                table.SetValue(row, 0, vtk.vtkVariant(float(time)))
+                table.SetValue(row, 1, vtk.vtkVariant(float(flow)))
+            table.Modified()
+        chart = self.chartView.chart()
+        chart.RecalculateBounds()
+        self.chartView.scene().SetDirty(True)
+        self.chartView.renderWindow().Render()
+        text = _("{points} points over {period:g} s: mean {mean:.4g} mL/s, from {low:.4g} to "
+                 "{high:.4g} mL/s.").format(points=len(waveform.time), period=waveform.period,
+                                            mean=waveform.mean, low=min(waveform.flow),
+                                            high=max(waveform.flow))
+        negative = waveform.mean < 0
+        if negative:
+            text += " " + _("The mean is negative: as it is, this cap would take flow out of the model.")
+        self.summaryLabel.text = text
+        self.summaryLabel.styleSheet = f"QLabel {{ color: {WARNING_COLOR}; }}" if negative else ""
+
+    def ask(self):
+        """True to negate the file's flow, False to take it as it is, None if cancelled."""
+        if not self.dialog.exec_():
+            return None
+        return bool(self.negateCheckBox.checked)
 
 
 def faceNames(meshNode):
@@ -396,8 +506,16 @@ class BoundaryConditionsTable:
             path = self.chooseWaveformFile(faceId)
             if not path:
                 return
+            waveform = None
             with slicer.util.tryWithErrorDisplay(_("Could not read the waveform."), waitCursor=True):
-                self.setStatus(self.loadWaveform(path, faceId))
+                waveform = bcs.read_flow_file(path)
+            if waveform is None:
+                return
+            negate = self.reviewWaveform(waveform, faceId)
+            if negate is None:
+                return
+            with slicer.util.tryWithErrorDisplay(_("Could not read the waveform."), waitCursor=True):
+                self.setStatus(self.loadWaveform(path, faceId, negate=negate))
         elif kind is not None:
             self.table.editItem(self.table.item(row, column))
 
@@ -415,9 +533,17 @@ class BoundaryConditionsTable:
             qt.QSettings().setValue(WAVEFORM_DIRECTORY_SETTING, os.path.dirname(path))
         return path
 
-    def loadWaveform(self, path, faceId):
-        """Give a cap the waveform in a file, saying so if it had to be turned round."""
-        waveform, turned = bcs.as_inflow(bcs.read_flow_file(path))
+    def reviewWaveform(self, waveform, faceId):
+        """Show a file's waveform, and ask whether to negate it: True, False, or None to give the
+        cap nothing. Its own method, as chooseWaveformFile is, so that a test can answer it."""
+        return WaveformReview(waveform, self.capName(faceId)).ask()
+
+    def loadWaveform(self, path, faceId, negate=False):
+        """Give a cap the waveform in a file, negated if asked; saying so, and saying when its mean
+        is negative, which takes flow out of the model at that cap."""
+        waveform = bcs.read_flow_file(path)
+        if negate:
+            waveform = waveform.flipped()
         self.conditions[faceId] = waveform
         self.invalid.pop(faceId, None)
         self.save()
@@ -426,7 +552,9 @@ class BoundaryConditionsTable:
         note = _("{name}: {points} points over {period:g} s, mean {mean:.4g} mL/s.").format(
             name=self.capName(faceId), points=len(waveform.time), period=waveform.period,
             mean=waveform.mean)
-        if turned:
-            note += " " + _("Its flows were negative, as svMultiPhysics writes an inflow, and have "
-                            "been turned round: here an inflow is positive.")
+        if negate:
+            note += " " + _("Negated: every flow in the file multiplied by -1.")
+        if waveform.mean < 0:
+            note += " " + _("Its mean is negative, so this cap takes flow out of the model: "
+                            "double-click its values to load it again, negated.")
         return note

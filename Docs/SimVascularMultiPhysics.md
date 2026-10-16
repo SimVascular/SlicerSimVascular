@@ -41,7 +41,38 @@ queue on a cluster, and times the steps, which says what the full run will cost.
 4. **Check the settings** under **CFD Simulation**. Each group is collapsed and starts at the
    defaults; a value you change is shown in bold, and one that cannot be read in red, with the
    reason as its tooltip. **Reset settings to defaults** puts them all back. The time stepping is
-   10 s of 1 ms steps unless you change it (see *Defaults* below).
+   1 ms steps unless you change it (see *Defaults* below).
+
+   Two sections of **General** each choose how a value is set; the value not typed is shown,
+   greyed:
+   - **Number of time steps**: **User-defined** (10,000, the default), typed; or **Calculate from
+     cardiac cycles** (10), worked out from the inflow waveform's cycle and the time step --
+     changing the number of cycles chooses it. A case whose inflows are all steady has no cycle to
+     count, and runs the number typed, whichever is chosen; the panel says so under the cycles.
+   - **Time step size**: **User-defined** (0.001 s, the default), typed; or **Estimate time step
+     from CFL**, which opens three fields under it:
+     - **CFL number**, 1 recommended;
+     - **Max velocity**, in cm/s, filled in with the fastest velocity an inflow imposes -- its peak
+       flow, in mL/s, over its cap's area, in mm², twice that on the centreline with the Parabolic
+       profile;
+     - **Mesh size**, in mm, filled in with the mesh's mean edge length.
+
+     The step is the CFL number times the mesh size over the max velocity, with the millimetres
+     scaled to the solver's centimetres by **Mesh scale factor**, rounded down to a whole number of
+     steps per cardiac cycle. It is worked out again whenever any of these, the mesh or the
+     conditions change. Type over the max velocity or the mesh size -- for a narrowing faster than
+     the inflow, a region finer than the mean -- and it is bold, used as typed and kept as the case
+     changes; **Use the case's values** puts both back.
+
+     With **Adapt the saving to the time step**, ticked by default, the saving is kept as it was in
+     time -- results as many per cycle, at the same points of every cycle, saving started when it
+     was, restart files as often. Type any of the three saving settings under it instead and the
+     saving is yours: the box is cleared, what you typed is kept in steps as the step changes, and
+     the step is only rounded to whole steps per cycle. Tick it again to have the saving adapted
+     from what it is. The line under them gives every number with its units, the case's own beside
+     any typed over, how many results the run saves, and -- for a saving typed -- whether results
+     fall at the same point of every cycle.
+
 5. **Choose an output folder**, by default `svmultiphysics/<mesh>` next to the saved scene, and
    click **Create solver files**. The status line says what was written.
 6. **Test it here** (optional), under **Test run**:
@@ -121,9 +152,15 @@ and nothing else holds a default:
   0.01, `NS_CG_tolerance` 0.2, `Krylov_space_dimension` 50. There is no `Absolute_tolerance`, so
   svMultiPhysics' own 1e-10 applies. The Fontan template tightens it to 1e-17; that was considered
   and not taken.
-- **Time stepping and saving:** 10000 steps of 0.001 s (10 s), saving results and restart files
-  every 100 steps from step 1. For a whole number of cardiac cycles, set the steps to cycles times
-  steps per cycle.
+- **Time stepping and saving:** a user-defined 0.001 s step and a user-defined 10,000 steps
+  (10 s), saving results and restart files every 100 steps from step 1. Calculated from 10 cardiac
+  cycles instead, the steps are 9,091 for the tutorial aorta's 0.909 s cycle. On the aorta, 1 ms is
+  CFL 4.7; estimated from CFL 1 the step is 2.1e-4 s, saving every 477, and the 10,000 steps then
+  run 2.1 s -- 42,930 for 10 cycles.
+- **Fluid iterations:** `Min_iterations` 3, `Max_iterations` 10 and `Tolerance` 1e-4, the lab's,
+  over the Fontan template's 2, 5 and 1e-3: at those, the test run of the tutorial aorta used all
+  five iterations in three of its first five steps without reaching the tolerance. At these, all
+  five steps converged, at 23 s a step on 8 processes.
 - **Everything else**, for now: the Fontan workflow's `solver_template.xml` (in ClinicalWorkflows),
   without its scalar-transport equation, as a stand-in until the defaults for this panel are
   settled.
@@ -228,6 +265,104 @@ velocity is in the solver's units, cm/s.
 Running through WSL is the one path not tested here, for want of Windows: the solver is found by
 asking WSL's shell where it is, and run with `wsl.exe --cd <folder> --exec`, which translates a
 Windows folder itself.
+
+### The number of time steps and the time step: each chosen, or worked out
+
+Each is a section of its own with a choice of how it is set -- the steps calculated from cardiac
+cycles or user-defined, the step user-defined or estimated from the CFL -- one or the other, never
+both: two fields that each set one value would disagree the moment either was changed. What is
+worked out is shown, greyed and read-only, and not bolded, since nobody typed it; it is what
+`solver.xml` gets. The cycles and the CFL number are not settings, since nothing in the file is
+them: they are kept on the scene, with which way each value is set.
+
+- **The steps user-defined by default**, 10,000, as the case was always written: the user's
+  choice, after a first version that calculated them from 10 cycles by default and greyed the
+  field a user expected to type in. The cycles are there because a run is read by the cycle -- the
+  last one, or the last few, once the RCR outlets have filled -- and a number of steps is a number
+  of cycles only by arithmetic that has to be redone whenever the time step changes. User-defined,
+  the steps are the user's, and the CFL estimate leaves them alone, whatever length of time they
+  then run; it says what that is. A steady inflow has no cycle to count, so with one the steps are typed whichever is
+  chosen: greyed, they were a leftover from the last waveform that nobody could change.
+- **The step user-defined by default**, the value the case was always written with. Estimated, it
+  is worked out again as the CFL, the mesh, the conditions or the profile change, rather than at a
+  button press, so that what is written is never an estimate for a mesh or an inflow since
+  replaced. It is worked out first, and the steps from it: the steps follow the step.
+- **What the estimate is made from is shown, and can be typed over.** The max velocity and the mesh
+  size are filled in from the case when the estimate is chosen, because those are the two numbers a
+  user has reason to doubt: the inflow is not always where the flow is fastest, and the mean edge is
+  not the finest. A value typed over is the user's: bold, used as typed rather than as the case's,
+  saved with the scene, and kept when the mesh or the conditions change, which a value left to the
+  case follows. Choosing the estimate again, or **Use the case's values**, puts both back. The
+  estimate uses a value left to the case as worked out, not as its field rounds it.
+- **User-defined first in both sections**, and the default in both, so that they read alike.
+- **Nothing a user might reach for is greyed without a word.** The cycles box takes a number whether
+  or not its option is chosen, and changing it chooses it; with no cycle to count -- a steady
+  inflow, no mesh, a time step that does not read -- the cycles say why under them. **Use the
+  case's values** can always be clicked, and fills both in from the case again. Both were disabled
+  until they would do something, and read as broken: a greyed box gives no reason, and the user
+  could not tell that it wanted a radio button pressed first.
+
+A scene opens with its steps calculated from cycles only if it was saved so; one saved before the
+choice existed opens with them user-defined, as they were written, so that opening it does not
+quietly make its run another length. Its time step opens user-defined.
+
+### The time step from the CFL
+
+`svmpsetup.time_step` is the estimate; the panel measures the mesh and the caps, and sets the
+fields. `dt = CFL * h / u`, in the solver's units, decided as follows:
+
+- **u is the fastest velocity an inflow imposes**: its waveform's peak flow over its cap's area,
+  doubled with the Parabolic profile, because a Poiseuille profile peaks on its centreline at twice
+  its mean. Not only on a circular cap: svMultiPhysics' profile is `1 - r²/R(θ)²`, with `R(θ)` the
+  distance from the cap's centroid to its rim in each direction, scaled to the flux, and that
+  averages half its peak over any cap whose rim the centroid sees all of. Checked against the
+  solver with a steady 100 mL/s through the aorta's 270.9 mm² valve: 73.84 cm/s estimated, 73.91
+  imposed in svMultiPhysics' first step, the difference the discrete cap's. A steady inflow is its
+  one flow throughout, and is said to be steady rather than a peak. The mean, peak flow over area, was rejected: with the default profile it gives a step
+  twice too long. With **Impose flux** off an inflow's values are velocities, not flows, and the
+  estimate is refused rather than made as though they were flows. Over several inflows, the
+  fastest.
+- **h is the mean edge length** of the volume mesh, each edge counted once however many cells
+  share it, so a labelled mesh's face triangles do not count theirs twice. It is about the size the
+  mesh was made at: CFD Mesh Generator's 1 mm target gives 0.73 mm on the aorta. Rejected: the
+  smallest edge, set by the worst few of a million elements (0.28 mm there), which would ask for a
+  step two and a half times shorter than the rest of the mesh needs; and the edges at the inflow
+  cap, which ignore faster flow downstream, through a narrowing for one.
+- **Either can be set instead.** These are what **Max velocity** and **Mesh size** are filled in
+  with, and `estimate` takes the same two: `velocity`, the case's when left `None`, and
+  `edge_length`, with `mesh_edge_length` the mesh's own, given only so that the explanation can say
+  it beside one typed over. A velocity set by hand needs no inflow, so a case with Impose flux off
+  can be estimated after all, from a velocity someone knows.
+- **The units go through the case's own scale factor.** A flow in mL/s is already in the solver's
+  cm³/s, but the cap's area is in mm² and the edges in mm, as Slicer's coordinates are, so they are
+  scaled by **Mesh scale factor** -- squared for the area -- not by a fixed 0.1: a case written with
+  a changed factor is estimated as it will run.
+- **Rounded down to whole steps per cycle**, by the period the conditions are written with (the
+  first waveform's), and the run that many steps a cycle times its cycles, when it is calculated
+  from them: results then fall at the same point of every cycle, and a run ends on a cycle's end. Down, never up, so the CFL is at most the one asked for. A steady inflow
+  has no cycle, and keeps its simulated time to the nearest step instead.
+- **The saving is kept in time, not in steps.** Every saving setting counts steps, so a step five
+  times shorter at the same "every 100 steps" would save five times as many results -- 472 rather
+  than 100 on the aorta, 40 MB each -- and "start saving after step 5000" would start at a fifth of
+  the time. So results are saved as many times per cycle as they were, and the steps per cycle are
+  rounded up to a multiple of that, so each result lands at the same point of every cycle: an
+  interval that does not divide the cycle drifts through it, and no two cycles compare result for
+  result. On the aorta, 4,287 steps a cycle become 4,293, nine results a cycle of 477 steps each,
+  and the CFL 0.9986. Saving fewer than once a cycle stays every so many whole cycles. The start of
+  saving is kept at the same time, and restart files as often in time, neither tied to the cycle.
+  Leaving the saving as it was, in steps, was the first version, and was rejected for the results
+  it multiplied. Worked out again with nothing changed, the estimate keeps the saving it set, and
+  says nothing was replaced.
+- **Or the saving is as typed.** Adapted, a saving typed was taken as the saving before and adapted
+  again the next time anything changed: on the aorta, every 1000 steps became every 1191 at CFL 0.9
+  and 1072 back at 1 -- and the same on opening the scene again. So typing a saving setting while
+  the estimate adapts it clears **Adapt the saving to the time step**, kept on the scene, and the
+  saving is left in steps exactly as typed; `estimate(..., adapt_saving=False)`. With no saving to
+  fit, the step is rounded to whole steps per cycle alone, and results that then fall at a
+  different point of each cycle are said rather than corrected, since someone typed them. A box
+  rather than each saving field bolded when typed, as the max velocity and the mesh size are: the
+  three are one choice -- adapted, or the user's -- and the box shows which, and gives the adapting
+  back. Only a field changed clears it, since one left unchanged still finishes its editing.
 
 ### Its own package first
 

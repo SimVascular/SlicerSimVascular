@@ -62,6 +62,20 @@ import sys
 import time
 import types
 
+# Its own folder first, as SimVascular MultiPhysics does, for the reason given there: with the
+# SimVascular extension installed, its folder is ahead of a checkout's on the Python path, so a
+# module loaded from a checkout would import the installed svromsetup and SimVascularROMLib -- the
+# table both panels set conditions in among them -- of whatever version that is. Installed, the
+# folders are one and nothing changes.
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+if sys.path[:1] != [_MODULE_DIR]:
+    sys.path.insert(0, _MODULE_DIR)
+# Reload runs this file again, but not the table it imports, which Python keeps as first imported;
+# so the table is imported afresh with it. Not svromsetup: SimVascular MultiPhysics holds its
+# classes too, and an Inflow made by one copy is not an Inflow to the other.
+for _name in [name for name in sys.modules if name == "SimVascularROMLib" or name.startswith("SimVascularROMLib.")]:
+    del sys.modules[_name]
+
 import numpy as np
 import qt
 import slicer
@@ -1172,6 +1186,8 @@ class SimVascularROMTest(ScriptedLoadableModuleTest):
         self.setUp()
         self.test_doubleClickingAnInflowLoadsItsWaveform()
         self.setUp()
+        self.test_aWaveformIsPlottedAndNegatedOnlyIfAsked()
+        self.setUp()
         self.test_aMeshWithoutNamesIsSentToMeshPrep()
         self.setUp()
         self.test_aWholeCaseOnAY()
@@ -1257,15 +1273,33 @@ class SimVascularROMTest(ScriptedLoadableModuleTest):
         path = os.path.join(tempfile.mkdtemp(), "inlet.flow")
         with open(path, "w") as handle:
             handle.write("0.0 -5.0\n0.4 -15.0\n0.8 -5.0\n")
-        asked = []
-        widget.conditionsTable.chooseWaveformFile = lambda faceId: asked.append(faceId) or path
+        asked, shown = [], []
+        conditions = widget.conditionsTable
+        conditions.chooseWaveformFile = lambda faceId: asked.append(faceId) or path
+        # Answered as the user answers the pop-up that plots it: negate it.
+        conditions.reviewWaveform = lambda waveform, faceId: shown.append(waveform) or True
+        inlet = lambda: conditions.onCellDoubleClicked(conditions.rowOf(testing.INLET_ID), VALUES_COLUMN)
         try:
             self.typeCondition(widget, testing.INLET_ID, bcs.INFLOW, "")
-            widget.conditionsTable.onCellDoubleClicked(widget.conditionsTable.rowOf(testing.INLET_ID), VALUES_COLUMN)
+            inlet()
             self.assertEqual(asked, [testing.INLET_ID])
-            self.assertEqual(widget.conditionsTable.conditions[testing.INLET_ID],
-                             bcs.Inflow((0.0, 0.4, 0.8), (5.0, 15.0, 5.0)))
-            self.assertIn("turned round", widget.ui.statusLabel.text)
+            self.assertEqual(shown[0].flow, (-5.0, -15.0, -5.0), "shown as the file has it")
+            self.assertEqual(conditions.conditions[testing.INLET_ID],
+                             bcs.Inflow((0.0, 0.4, 0.8), (5.0, 15.0, 5.0)), "negated, as asked")
+            self.assertIn("Negated", widget.ui.statusLabel.text)
+            # Not negated, it is taken as the file has it, and its negative mean is said.
+            conditions.reviewWaveform = lambda waveform, faceId: False
+            inlet()
+            self.assertEqual(conditions.conditions[testing.INLET_ID].flow, (-5.0, -15.0, -5.0))
+            self.assertIn("mean is negative", widget.ui.statusLabel.text)
+            # Cancelled, the cap keeps what it had.
+            conditions.reviewWaveform = lambda waveform, faceId: None
+            conditions.conditions[testing.INLET_ID] = bcs.Inflow.steady(3.0)
+            inlet()
+            self.assertEqual(conditions.conditions[testing.INLET_ID], bcs.Inflow.steady(3.0))
+            conditions.reviewWaveform = lambda waveform, faceId: True
+            inlet()
+            asked[:] = [testing.INLET_ID]
             self.assertEqual(table.item(widget.conditionsTable.rowOf(testing.INLET_ID), VALUES_COLUMN).text(),
                              os.path.realpath(path), "the cell names the file the waveform came from")
 
@@ -1287,7 +1321,39 @@ class SimVascularROMTest(ScriptedLoadableModuleTest):
             self.assertEqual(asked, [testing.INLET_ID])
         finally:
             del widget.conditionsTable.chooseWaveformFile
+            del widget.conditionsTable.reviewWaveform
         self.delayDisplay("Double-clicking an inflow loads its waveform")
+
+    def test_aWaveformIsPlottedAndNegatedOnlyIfAsked(self):
+        """The pop-up a waveform file opens: every point plotted as the file has it, Negate flow
+        unticked, and ticked, the curve and its summary turned round."""
+        from SimVascularROMLib.BoundaryConditionsTable import WaveformReview
+
+        waveform = bcs.Inflow((0.0, 0.4, 0.8), (-5.0, -15.0, -5.0), "/somewhere/inlet.flow")
+        review = WaveformReview(waveform, "cap_inlet")
+        try:
+            review.dialog.show()
+            self.assertFalse(review.negateCheckBox.checked, "not negated until asked")
+            self.assertEqual(review.given(), waveform)
+            curve = review._curve
+            self.assertEqual([curve.GetValue(row, 1).ToDouble() for row in range(curve.GetNumberOfRows())],
+                             [-5.0, -15.0, -5.0], "every point, as the file has it")
+            self.assertIn("mean is negative", review.summaryLabel.text)
+            review.negateCheckBox.checked = True
+            self.assertEqual(review.given().flow, (5.0, 15.0, 5.0))
+            self.assertEqual(curve.GetValue(1, 1).ToDouble(), 15.0, "the plot follows the box")
+            self.assertNotIn("negative", review.summaryLabel.text)
+            box = review.dialog.findChildren(qt.QDialogButtonBox)[0]
+            for which in (qt.QDialogButtonBox.Ok, qt.QDialogButtonBox.Cancel):
+                button = box.button(which)
+                self.assertIsNotNone(button, "OK and Cancel are there")
+                bottom = button.mapTo(review.dialog, qt.QPoint(0, button.height)).y()
+                self.assertTrue(button.height > 0 and bottom <= review.dialog.height, "and on screen")
+            box.button(qt.QDialogButtonBox.Ok).click()
+            self.assertEqual(review.dialog.result(), qt.QDialog.Accepted)
+        finally:
+            review.dialog.reject()
+        self.delayDisplay("A waveform is plotted, and negated only if asked")
 
     def test_aMeshWithoutNamesIsSentToMeshPrep(self):
         from svmeshcomplete import testing
