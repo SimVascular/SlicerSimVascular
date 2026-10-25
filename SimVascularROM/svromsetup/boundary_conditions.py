@@ -311,7 +311,9 @@ def with_period(condition, period: float):
 def read_flow_file(path) -> Inflow:
     """A waveform from a `.flow` file: time and flow per line, space- or comma-separated.
 
-    As written, sign and all. A file made for svMultiPhysics carries an inflow as *negative* --
+    As written, sign and all. A file made for svMultiPhysics has two integer values for the
+    number of time points in the file and the number of Fourier modes used to interpolate
+    flow values. The flow values for an inflow are *negative* --
     its flow is measured along the outward normal -- and the reduced-order solvers take it as
     positive. Which one a file is cannot be read off the file, so the caller says so: the panels
     plot it and ask, and `as_inflow` guesses from the mean for a script that has to.
@@ -322,8 +324,9 @@ def read_flow_file(path) -> Inflow:
         if not values or values[0].startswith("#"):
             continue
         try:
-            times.append(float(values[0]))
-            flows.append(float(values[1]))
+            if not values[0].isdigit():
+                times.append(float(values[0]))
+                flows.append(float(values[1]))
         except (IndexError, ValueError):
             raise BoundaryConditionError(
                 f"{path}, line {number}: expected a time and a flow, found {line.strip()!r}."

@@ -202,6 +202,6 @@ def write_flow_file(path, inflow: Inflow, coefficients: int) -> None:
     lines and stops early or runs out otherwise.
     """
     lines = [f"{len(inflow.time)} {int(coefficients)}"]
-    lines += [f"{float(t)!r} {-float(q)!r}" for t, q in zip(inflow.time, inflow.flow)]
+    lines += [f"{float(t)!r} {float(q)!r}" for t, q in zip(inflow.time, inflow.flow)]
     with open(path, "w", newline="\n") as handle:
         handle.write("\n".join(lines) + "\n")
