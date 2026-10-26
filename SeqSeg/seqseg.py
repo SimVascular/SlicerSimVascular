@@ -426,10 +426,11 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         if hasattr(self.ui, 'browseOutputsButton'):
             self.ui.browseOutputsButton.connect("clicked(bool)", self.onBrowseOutputsButton)
         
-        # Connect output directory button to sync with parameter node
-        # ctkDirectoryButton emits directoryChanged signal when directory changes
-        if hasattr(self.ui.outputDirectoryButton, 'directoryChanged'):
-            self.ui.outputDirectoryButton.connect('directoryChanged(QString)', self.onOutputDirectoryChanged)
+        # A path line edit rather than a ctkDirectoryButton: the button asks the layout for the
+        # full width of its path, so a long output folder widened the whole module panel.
+        # connectGui binds ctkPathLineEdit only to pathlib.Path parameters, so this one is synced
+        # by hand, in _syncUiWithParameterNode and here.
+        self.ui.outputDirectoryPathLineEdit.connect('currentPathChanged(QString)', self.onOutputDirectoryChanged)
 
         # Connect image unit combo box to sync with parameter node
         if hasattr(self.ui, 'unitComboBox') and hasattr(self.ui.unitComboBox, 'currentTextChanged'):
@@ -556,10 +557,7 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             if firstVolumeNode:
                 self._parameterNode.inputVolume = firstVolumeNode
 
-        # Sync UI with parameter node values
-        self._syncUiWithParameterNode()
-        
-        # Set default output directory if not set
+        # Set default output directory if not set, before the sync so the field shows it
         if not self._parameterNode.outputDirectory:
             default_output_dir = os.path.join(os.path.expanduser("~"), "SeqSeg_Output")
             # Ensure directory ends with '/'
@@ -567,6 +565,9 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 default_output_dir = default_output_dir + os.sep
             self._parameterNode.outputDirectory = default_output_dir
             logging.info(f"Using default output directory: {default_output_dir}")
+
+        # Sync UI with parameter node values
+        self._syncUiWithParameterNode()
 
     def _populateTrainDatasetComboFromKnown(self) -> None:
         """Rebuild Train Dataset combo with friendly labels; itemData stores real dataset ids.
@@ -688,9 +689,10 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         if not self._completeSeedLines():
             missing_requirements.append("Seed line (Add Seed, then place start and direction)")
         
-        # Update UI based on requirements
+        # Update UI based on requirements. The missing list goes to the status line, which
+        # wraps, not onto the button, whose label width becomes the module panel's minimum.
         if missing_requirements:
-            self.ui.applyButton.text = f"Missing: {', '.join(missing_requirements)}"
+            self.ui.applyButton.text = "🚀 Run SeqSeg"
             self.ui.applyButton.enabled = False
             self._updateStatusMessage(f"Please provide: {', '.join(missing_requirements)}")
         else:
@@ -831,24 +833,14 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             logging.info(f"Output directory from parameter node: '{outputDirectory}'")
             
             # If output directory is empty, try to get it from the UI directly
-            # ctkDirectoryButton uses 'directory' property
             if not outputDirectory:
-                try:
-                    # Try different possible property names
-                    if hasattr(self.ui.outputDirectoryButton, 'directory'):
-                        outputDirectory = self.ui.outputDirectoryButton.directory
-                    elif hasattr(self.ui.outputDirectoryButton, 'currentPath'):
-                        outputDirectory = self.ui.outputDirectoryButton.currentPath
-                    elif hasattr(self.ui.outputDirectoryButton, 'text'):
-                        outputDirectory = self.ui.outputDirectoryButton.text
-                    logging.info(f"Output directory from UI button: '{outputDirectory}'")
-                    if outputDirectory:
-                        # Ensure directory ends with '/'
-                        if not outputDirectory.endswith(os.sep):
-                            outputDirectory = outputDirectory + os.sep
-                        self._parameterNode.outputDirectory = outputDirectory
-                except (AttributeError, Exception) as e:
-                    logging.warning(f"Could not get directory from UI button: {e}")
+                outputDirectory = self.ui.outputDirectoryPathLineEdit.currentPath
+                logging.info(f"Output directory from UI field: '{outputDirectory}'")
+                if outputDirectory:
+                    # Ensure directory ends with '/'
+                    if not outputDirectory.endswith(os.sep):
+                        outputDirectory = outputDirectory + os.sep
+                    self._parameterNode.outputDirectory = outputDirectory
             
             # Final check - if still empty, use default
             if not outputDirectory:
@@ -913,7 +905,7 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 self._updateStatusMessage(weights_status, isError=weights_error)
 
     def onOutputDirectoryChanged(self, directory: str) -> None:
-        """Called when output directory button changes - sync with parameter node."""
+        """Called when the output directory field changes - sync with parameter node."""
         if self._parameterNode and directory:
             # Ensure directory ends with '/'
             if not directory.endswith(os.sep):
@@ -978,6 +970,10 @@ class seqsegWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         """Manually sync UI controls with parameter node values."""
         if not self._parameterNode:
             return
+
+        # Output directory field (not bound by connectGui; see setup)
+        if self._parameterNode.outputDirectory:
+            self.ui.outputDirectoryPathLineEdit.currentPath = self._parameterNode.outputDirectory
 
         # Sync image unit combo box (backup for parameter binding)
         if hasattr(self.ui, 'unitComboBox') and self._parameterNode.imageUnit:
