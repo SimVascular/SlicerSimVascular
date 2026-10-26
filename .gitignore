@@ -60,6 +60,9 @@ target/
 *~
 *.bak
 
+# macOS Finder metadata; the old SlicerSeqSeg repo, where SeqSeg/ came from, committed some
+.DS_Store
+
 # Local MCP server config (absolute paths to this machine)
 .mcp.json
 
