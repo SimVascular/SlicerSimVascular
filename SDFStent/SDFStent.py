@@ -90,6 +90,37 @@ def registerSampleData():
     )
 
 
+def _isCenterlineNode(node) -> bool:
+    """True for a markups curve, or a model whose mesh is lines only.
+
+    The centerline selector lists every model node and has no "None" entry, so Qt selects the
+    first node to arrive in its empty list: open the panel before loading data and it selects the
+    vessel surface itself, and the centerline model Extract Centerline adds later never replaces
+    it. svmorph rejects a surface only deep in the deployment, with "No polyline cell found in
+    centerline polydata", which does not say which input is wrong.
+    """
+    if not node or node.GetHideFromEditors():
+        return False
+    if node.IsA("vtkMRMLMarkupsCurveNode"):
+        return True
+    if node.IsA("vtkMRMLModelNode"):
+        polyData = node.GetPolyData()
+        return bool(polyData and polyData.GetNumberOfLines() > 0 and polyData.GetNumberOfPolys() == 0)
+    return False
+
+
+def _firstCenterlineNode():
+    """The first markups curve in the scene, else the first model that is a centerline. Hidden
+    nodes are skipped: the slice views' plane models are model nodes too, and the second model
+    node in a scene (what this panel used to default to) is the green slice's."""
+    for className in ("vtkMRMLMarkupsCurveNode", "vtkMRMLModelNode"):
+        for index in range(slicer.mrmlScene.GetNumberOfNodesByClass(className)):
+            node = slicer.mrmlScene.GetNthNodeByClass(index, className)
+            if _isCenterlineNode(node):
+                return node
+    return None
+
+
 @parameterNodeWrapper
 class SDFStentParameterNode:
     inputVesselSegmentation: Optional[vtkMRMLSegmentationNode] = None
@@ -193,21 +224,19 @@ class SDFStentWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         if not self.ui.inputSurfaceSelector.currentNode() and self._parameterNode.inputVesselSegmentation:
             self.ui.inputSurfaceSelector.setCurrentNode(self._parameterNode.inputVesselSegmentation)
 
-        if not self.ui.inputCenterlineSelector.currentNode() and self._parameterNode.inputCenterlineCurve:
-            self.ui.inputCenterlineSelector.setCurrentNode(self._parameterNode.inputCenterlineCurve)
-
         if self.ui.inputSurfaceSelector.currentNode() and not self.ui.inputSurfaceSelector.currentSegmentID():
             segmentation = self.ui.inputSurfaceSelector.currentNode().GetSegmentation()
             if segmentation and segmentation.GetNumberOfSegments() > 0:
                 self.ui.inputSurfaceSelector.setCurrentSegmentID(segmentation.GetNthSegmentID(0))
 
-        if not self._parameterNode.inputCenterlineCurve:
-            firstCurveNode = slicer.mrmlScene.GetFirstNodeByClass("vtkMRMLMarkupsCurveNode")
-            if firstCurveNode:
-                self._parameterNode.inputCenterlineCurve = firstCurveNode
-            modelCount = slicer.mrmlScene.GetNumberOfNodesByClass("vtkMRMLModelNode")
-            if not self._parameterNode.inputCenterlineCurve and modelCount > 1:
-                self._parameterNode.inputCenterlineCurve = slicer.mrmlScene.GetNthNodeByClass(1, "vtkMRMLModelNode")
+        # Replace a missing or wrong centerline (usually the vessel surface, see _isCenterlineNode)
+        # on every enter, so a centerline made in Extract Centerline in the meantime is picked up
+        if not _isCenterlineNode(self._parameterNode.inputCenterlineCurve):
+            centerlineNode = _firstCenterlineNode()
+            if centerlineNode:
+                self._parameterNode.inputCenterlineCurve = centerlineNode
+        if self._parameterNode.inputCenterlineCurve and self.ui.inputCenterlineSelector.currentNode() != self._parameterNode.inputCenterlineCurve:
+            self.ui.inputCenterlineSelector.setCurrentNode(self._parameterNode.inputCenterlineCurve)
 
         self._ensureCenterPointMarkupNode()
 
@@ -337,6 +366,9 @@ class SDFStentWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             disabledReason = _("Select an input surface segment.")
         elif not inputCenterlineCurve:
             disabledReason = _("Select an input centerline model/curve.")
+        elif not _isCenterlineNode(inputCenterlineCurve):
+            disabledReason = _("\"{name}\" is not a centerline: a centerline model has line cells only. "
+                               "Select the centerline made by Extract Centerline.").format(name=inputCenterlineCurve.GetName())
         elif not hasCenterPoint:
             disabledReason = _("Place one center point.")
         elif self._parameterNode.targetRadius <= 0.0:
@@ -541,6 +573,9 @@ class SDFStentLogic(ScriptedLoadableModuleLogic):
             modelPolyData = modelNode.GetPolyData()
             if not modelPolyData or modelPolyData.GetNumberOfPoints() == 0:
                 raise ValueError("Input centerline model has no polydata")
+            if modelPolyData.GetNumberOfLines() == 0:
+                raise ValueError(f"Input centerline model \"{modelNode.GetName()}\" has no line cells, so it is not a centerline"
+                                 " (is the vessel surface selected as the centerline?)")
             centerlinePolyData.DeepCopy(modelPolyData)
         elif centerlineNode.IsA("vtkMRMLMarkupsCurveNode"):
             curveNode = centerlineNode
@@ -892,6 +927,49 @@ class SDFStentLogic(ScriptedLoadableModuleLogic):
         pointIds = list(range(polyData.GetNumberOfPoints()))
         return pointIds, [points.GetPoint(pointId) for pointId in pointIds]
 
+    def _stentPolylinePolyData(self, polyData: vtk.vtkPolyData, centerWorldPosition) -> vtk.vtkPolyData:
+        """The polyline of the centerline that passes closest to the center point, as a new polydata
+        whose point ids run along the line (0 .. n-1), with the point data carried over.
+
+        The start point is found by walking along the line cell (_startPointIdFromCenterAndLength),
+        but svmorph samples the stent axis from it by point id, toward decreasing ids, and the two
+        agree only when ids increase along the line. Extract Centerline's centerline model lists
+        them the other way round (n-1 .. 0): the stent axis then ran away from the center point
+        instead of back across it, and the stent landed about a stent length past where it was
+        placed, while the panel still reported the target radius as reached. Taking the polyline
+        nearest the center point, rather than the longest, also keeps the stent on the branch that
+        was clicked; svmorph would otherwise use whichever polyline comes first."""
+        lines = polyData.GetLines()
+        idList = vtk.vtkIdList()
+        best = None
+        if lines:
+            lines.InitTraversal()
+            while lines.GetNextCell(idList):
+                pointIds = [idList.GetId(i) for i in range(idList.GetNumberOfIds())]
+                if len(pointIds) < 2:
+                    continue
+                distance2 = min(vtk.vtkMath.Distance2BetweenPoints(polyData.GetPoint(pointId), centerWorldPosition) for pointId in pointIds)
+                # Polylines sharing a trunk tie there; the longest wins, as it did before
+                if best is None or (distance2, -len(pointIds)) < (best[0], -len(best[1])):
+                    best = (distance2, pointIds)
+        if best is None:
+            raise ValueError("Input centerline has no polyline with at least two points")
+
+        pointIds = best[1]
+        points = vtk.vtkPoints()
+        points.SetNumberOfPoints(len(pointIds))
+        polyLine = vtk.vtkCellArray()
+        polyLine.InsertNextCell(len(pointIds))
+        orderedPolyData = vtk.vtkPolyData()
+        orderedPolyData.GetPointData().CopyAllocate(polyData.GetPointData(), len(pointIds))
+        for newId, oldId in enumerate(pointIds):
+            points.SetPoint(newId, polyData.GetPoint(oldId))
+            orderedPolyData.GetPointData().CopyData(polyData.GetPointData(), oldId, newId)
+            polyLine.InsertCellPoint(newId)
+        orderedPolyData.SetPoints(points)
+        orderedPolyData.SetLines(polyLine)
+        return orderedPolyData
+
     def _startPointIdFromCenterAndLength(self, polyData: vtk.vtkPolyData, centerWorldPosition: list[float], stentLength: float) -> int:
         pointIds, points = self._polylinePointIdsAndPointsFromPolyData(polyData)
         if len(points) < 1:
@@ -962,17 +1040,18 @@ class SDFStentLogic(ScriptedLoadableModuleLogic):
         parameterNode.outputSurfaceModel = outputSurfaceNode
         parameterNode.outputCenterlineModel = outputCenterlineNode
 
+        centerPointPositionWorld = [0.0, 0.0, 0.0]
+        centerPointMarkup.GetNthControlPointPositionWorld(0, centerPointPositionWorld)
+        centerPointPositionWorldCm = [c * self._mmToCm for c in centerPointPositionWorld]
+
         inputSurfacePolyData = self._getSegmentClosedSurfacePolyData(inputVesselSegmentation, inputVesselSegmentId)
-        inputCenterlinePolyData = self._getCenterlinePolyData(inputCenterlineCurve)
+        inputCenterlinePolyData = self._stentPolylinePolyData(self._getCenterlinePolyData(inputCenterlineCurve), centerPointPositionWorld)
         inputSurfacePolyDataCm = self._scaledPolyData(inputSurfacePolyData, self._mmToCm)
         inputCenterlinePolyDataCm = self._scaledPolyData(inputCenterlinePolyData, self._mmToCm)
 
         if not inputSurfacePolyDataCm or inputSurfacePolyDataCm.GetNumberOfPoints() == 0:
             raise ValueError("Input surface model has no polydata")
 
-        centerPointPositionWorld = [0.0, 0.0, 0.0]
-        centerPointMarkup.GetNthControlPointPositionWorld(0, centerPointPositionWorld)
-        centerPointPositionWorldCm = [c * self._mmToCm for c in centerPointPositionWorld]
         startPointId = self._startPointIdFromCenterAndLength(inputCenterlinePolyDataCm, centerPointPositionWorldCm, stentLengthCm)
 
         if self._useExternalPythonEnv():
@@ -1118,7 +1197,8 @@ class SDFStentLogic(ScriptedLoadableModuleLogic):
 
         # --- Deployment loop ---
         workDir = tempfile.mkdtemp(prefix="SDFStent_") if (enableSnapshots or preserveTemporaryFiles) else None
-        shouldDeleteTemporaryFiles = not preserveTemporaryFiles
+        # Snapshots are written into the temporary folder, so deleting it would discard them unseen
+        shouldDeleteTemporaryFiles = not (preserveTemporaryFiles or enableSnapshots)
         try:
             snapshotMgr = None
             if workDir and enableSnapshots:
@@ -1329,7 +1409,8 @@ class SDFStentLogic(ScriptedLoadableModuleLogic):
         import subprocess
 
         workDir = tempfile.mkdtemp(prefix="SDFStent_")
-        shouldDeleteTemporaryFiles = not preserveTemporaryFiles
+        # Snapshots are written into the temporary folder, so deleting it would discard them unseen
+        shouldDeleteTemporaryFiles = not (preserveTemporaryFiles or enableSnapshots)
         try:
             workDirPath = pathlib.Path(workDir)
 
@@ -1431,6 +1512,8 @@ class SDFStentTest(ScriptedLoadableModuleTest):
     def runTest(self):
         self.setUp()
         self.test_SDFStent_deployVessel01()
+        self.setUp()
+        self.test_SDFStent_centerlineModelWithReversedPointIds()
 
     def test_SDFStent_deployVessel01(self):
         import numpy as np
@@ -1578,3 +1661,55 @@ class SDFStentTest(ScriptedLoadableModuleTest):
         os.remove(transformFilePath)
 
         self.delayDisplay("SDFStent Vessel01 deployment test passed")
+
+    def test_SDFStent_centerlineModelWithReversedPointIds(self):
+        """Extract Centerline's centerline model lists its point ids from last to first. The stent
+        must still be centred on the center point; it used to land a stent length away from it."""
+        import numpy as np
+        from vtk.util.numpy_support import vtk_to_numpy
+
+        import SampleData
+        loadedNodes = SampleData.SampleDataLogic().downloadSamples("Vessel01")
+        segmentationNode = next(node for node in loadedNodes if node.IsA("vtkMRMLSegmentationNode"))
+        curveNode = next(node for node in loadedNodes if node.IsA("vtkMRMLMarkupsCurveNode"))
+        segmentId = segmentationNode.GetSegmentation().GetNthSegmentID(0)
+
+        # Same line as the curve, with the points stored last to first and the cell reading n-1 .. 0
+        curvePoints = slicer.util.arrayFromMarkupsCurvePoints(curveNode, world=True)
+        reversedPoints = vtk.vtkPoints()
+        for point in curvePoints[::-1]:
+            reversedPoints.InsertNextPoint(*point)
+        polyLine = vtk.vtkCellArray()
+        polyLine.InsertNextCell(len(curvePoints))
+        for index in range(len(curvePoints)):
+            polyLine.InsertCellPoint(len(curvePoints) - 1 - index)
+        centerlinePolyData = vtk.vtkPolyData()
+        centerlinePolyData.SetPoints(reversedPoints)
+        centerlinePolyData.SetLines(polyLine)
+        centerlineModelNode = slicer.modules.models.logic().AddModel(centerlinePolyData)
+
+        logic = SDFStentLogic()
+        parameterNode = logic.getParameterNode()
+        parameterNode.inputVesselSegmentation = segmentationNode
+        parameterNode.inputVesselSegmentId = segmentId
+        parameterNode.inputCenterlineCurve = centerlineModelNode
+        centerPosition = np.array([-32.3214, -54.5704, 113.5213])
+        centerPointNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode", "CenterPoint")
+        centerPointNode.AddControlPointWorld(*centerPosition)
+        parameterNode.centerPointMarkup = centerPointNode
+        parameterNode.startRadius = 3.0
+        parameterNode.targetRadius = 9.0
+        parameterNode.stentLength = 45.0
+
+        inputSurfacePolyData = logic._getSegmentClosedSurfacePolyData(segmentationNode, segmentId)
+        inputSurfacePoints = vtk_to_numpy(inputSurfacePolyData.GetPoints().GetData()).copy()
+        self.delayDisplay("Deploying stent on a centerline model with reversed point ids")
+        outputSurfaceNode, _ = logic.process()
+        outputSurfacePoints = vtk_to_numpy(outputSurfaceNode.GetPolyData().GetPoints().GetData())
+        displacements = np.linalg.norm(outputSurfacePoints - inputSurfacePoints, axis=1)
+        nearCenter = np.linalg.norm(inputSurfacePoints - centerPosition, axis=1) < 10.0
+        self.assertGreater(np.mean(displacements[nearCenter]), 1.0)
+        movedCentroid = inputSurfacePoints[displacements > 0.5].mean(axis=0)
+        self.assertLess(np.linalg.norm(movedCentroid - centerPosition), 0.25 * parameterNode.stentLength)
+
+        self.delayDisplay("SDFStent reversed centerline model test passed")
