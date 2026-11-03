@@ -42,10 +42,11 @@ BOUNDARY_CONDITIONS_ATTRIBUTE = "SimVascularROM.BoundaryConditions"
 # together, whichever solver they are being given to.
 WAVEFORM_DIRECTORY_SETTING = "SimVascularROM/WaveformDirectory"
 
-# A .flow file's table, as SimVascular ROM Simulation's reader makes it: marked with the file it
-# was read from, so that a node selector can offer waveforms alone, and anything reading the scene
-# can tell a waveform's table from any other, and where it came from; a time and a flow column.
-# Here rather than beside the reader, so that the table can filter by it in either panel.
+# A .flow file's table, as SimVascular ROM Simulation's reader makes it: marked "1", so that a node
+# selector can offer waveforms alone, and anything reading the scene can tell a waveform's table
+# from any other; a time and a flow column. Not marked with the file's path, which can carry a
+# patient's name or ID. Here rather than beside the reader, so that the table can filter by it in
+# either panel.
 FLOW_FILE_ATTRIBUTE = "SimVascularROM.FlowFile"
 FLOW_TIME_COLUMN, FLOW_VALUE_COLUMN = "time", "flow"
 # Which flow table a cap's inflow is read from, as a reference on the mesh, one role per cap: a

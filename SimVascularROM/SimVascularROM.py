@@ -329,7 +329,9 @@ class SimVascularROMFileReader:
             node.SetColumnUnitLabel(FLOW_VALUE_COLUMN, "mL/s")
             node.SetColumnDescription(FLOW_VALUE_COLUMN, _("Flow, as the file has it: a file written "
                                                            "for svMultiPhysics has an inflow negative."))
-            node.SetAttribute(FLOW_FILE_ATTRIBUTE, filePath)
+            # Marked as read from a .flow file, and not with the file's path: a path can carry a
+            # patient's name or ID, and the attribute goes wherever the scene does.
+            node.SetAttribute(FLOW_FILE_ATTRIBUTE, "1")
         except Exception as error:
             logging.exception("SimVascular ROM could not read the flow file.")
             self.parent.userMessages().AddMessage(
@@ -1260,11 +1262,16 @@ class SimVascularROMTest(ScriptedLoadableModuleTest):
 
     def test_aFlowFileLoadsAsATable(self):
         """A .flow file, found as a drop finds it -- by its extension -- is a table of its two columns,
-        time and flow, every row the file's, marked with the file it came from; and goes out with the
-        scene and back, to the six significant figures Slicer writes a table's numbers to."""
+        time and flow, every row the file's, marked as a .flow file's; and goes out with the scene and
+        back, to the six significant figures Slicer writes a table's numbers to, with nothing in the
+        scene saying where the file was. The file is the release's `cap_aorta.flow`."""
         import tempfile
+        import zipfile
 
-        path = os.path.join(os.path.dirname(slicer.modules.simvascularrom.path), "Resources", "cap_aorta.flow")
+        data = self.aorta()
+        if data is None:
+            return
+        path = str(data.cap_aorta_path)
         expected = np.loadtxt(path)
         self.assertEqual(slicer.app.coreIOManager().fileType(path), FLOW_FILE_TYPE)
         node = slicer.util.loadNodeFromFile(path)
@@ -1276,10 +1283,14 @@ class SimVascularROMTest(ScriptedLoadableModuleTest):
                          ("s", "mL/s"))
         np.testing.assert_array_equal(slicer.util.arrayFromTableColumn(node, FLOW_TIME_COLUMN), expected[:, 0])
         np.testing.assert_array_equal(slicer.util.arrayFromTableColumn(node, FLOW_VALUE_COLUMN), expected[:, 1])
-        self.assertEqual(node.GetAttribute(FLOW_FILE_ATTRIBUTE), path)
+        self.assertEqual(node.GetAttribute(FLOW_FILE_ATTRIBUTE), "1", "marked, and not with the path")
 
         bundle = os.path.join(tempfile.mkdtemp(), "flow.mrb")
         self.assertTrue(slicer.util.saveScene(bundle))
+        with zipfile.ZipFile(bundle) as archive:
+            scene = "".join(archive.read(name).decode(errors="replace") for name in archive.namelist()
+                            if name.endswith(".mrml"))
+        self.assertNotIn(os.path.dirname(path), scene, "where the file was is not in the scene")
         slicer.mrmlScene.Clear()
         slicer.util.loadScene(bundle)
         loaded = [table for table in slicer.util.getNodesByClass("vtkMRMLTableNode")
@@ -1493,6 +1504,11 @@ class SimVascularROMTest(ScriptedLoadableModuleTest):
         # than the six figures the table comes back with -- 82.0354 for the file's 82.03541779.
         bundle = os.path.join(tempfile.mkdtemp(), "inflow.mrb")
         self.assertTrue(slicer.util.saveScene(bundle))
+        import zipfile
+        with zipfile.ZipFile(bundle) as archive:
+            scene = "".join(archive.read(name).decode(errors="replace") for name in archive.namelist()
+                            if name.endswith(".mrml"))
+        self.assertNotIn(str(data.folder), scene, "where the inflow's file was is not in the scene")
         slicer.mrmlScene.Clear()
         slicer.util.loadScene(bundle)
         mesh = slicer.util.getNode("case01")
@@ -1507,8 +1523,8 @@ class SimVascularROMTest(ScriptedLoadableModuleTest):
 
         # Deleted, the table is gone from the selector, and the waveform read from it is kept.
         # Another table in the scene, for the selector to move on to by itself: the release's
-        # cap_aorta.flow, which this module carries for the reader's own test.
-        secondPath = os.path.join(os.path.dirname(slicer.modules.simvascularrom.path), "Resources", "cap_aorta.flow")
+        # cap_aorta.flow.
+        secondPath = str(data.cap_aorta_path)
         secondTimes, secondFlows = (tuple(column) for column in np.loadtxt(secondPath).T)
         second = slicer.util.loadNodeFromFile(secondPath)
         slicer.mrmlScene.RemoveNode(flowTable)

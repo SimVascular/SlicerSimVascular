@@ -58,7 +58,7 @@ cd FaceAwareRemesh && PYTHONPATH=. python -m unittest discover -s tests
 cd SimVascularMeshPrep && python -m pytest
 ```
 
-**svromsetup** — pytest; 42 tests with numpy and VTK alone, the rest skip unless
+**svromsetup** — pytest; 43 tests with numpy and VTK alone, the rest skip unless
 `svromutils` (with VMTK) and svZeroDSolver are installed. Both are on PyPI. The whole-case tests
 also need svReducedOrderModelingUtils' TESTING_DATA release (`case01`, about 17 MB), which they
 download into pytest's cache on first run; offline, set `SVROM_TESTING_DATA` to a folder holding

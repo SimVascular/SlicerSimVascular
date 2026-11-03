@@ -42,15 +42,27 @@ def test_a_waveform_read_from_a_file_is_shown_as_that_file(tmp_path):
     path.write_text("0.0 -5.0\n0.4 -15.0\n0.8 -5.0\n")
     waveform, turned = bcs.as_inflow(bcs.read_flow_file(path))
     assert turned
-    assert bcs.to_text(waveform) == str(path.resolve()), "turned round, and still that file's"
-    assert bcs.from_text(bcs.INFLOW, str(path.resolve()), previous=waveform) is waveform
+    assert bcs.to_text(waveform) == "cap_RSVC.flow", "turned round, and still that file's"
+    assert bcs.from_text(bcs.INFLOW, "cap_RSVC.flow", previous=waveform) is waveform
     # The file is where it came from, not what it is: the same numbers are the same inflow.
     assert waveform == Inflow((0.0, 0.4, 0.8), (5.0, 15.0, 5.0))
     # A steady flow read from a file is still that file's, rather than a number nobody typed.
     (tmp_path / "steady.flow").write_text("0.0 3.0\n0.8 3.0\n")
     assert bcs.to_text(bcs.read_flow_file(tmp_path / "steady.flow")).endswith("steady.flow")
-    # And the file is kept with the scene, so it is shown again after reopening it.
-    assert bcs.from_json(bcs.to_json({3: waveform}))[3].source == str(path.resolve())
+    # And the file is kept with the scene, so it is shown again after reopening it -- by its name,
+    # and not its folder, which can carry a patient's name or ID.
+    assert bcs.from_json(bcs.to_json({3: waveform}))[3].source == "cap_RSVC.flow"
+    assert str(tmp_path) not in bcs.to_json({3: waveform})
+
+
+def test_a_scene_saved_with_whole_paths_keeps_only_the_files_names():
+    """Scenes saved before the folder was dropped kept the whole path: read, and saved again, they
+    keep the file's name alone, a Windows path's as much as any other's."""
+    for path in ("/Users/someone/MRN123/cap_RSVC.flow", "C:\\Patients\\MRN123\\cap_RSVC.flow"):
+        saved = json.dumps({"3": {"type": bcs.INFLOW, "t": [0.0, 1.0], "Q": [2.0, 2.0], "file": path}})
+        read = bcs.from_json(saved)[3]
+        assert read.source == "cap_RSVC.flow"
+        assert "MRN123" not in bcs.to_json({3: read})
 
 
 @pytest.mark.parametrize("kind, text", [(bcs.RCR_KIND, "100, 200"), (bcs.RESISTANCE_KIND, "1 2 3"),

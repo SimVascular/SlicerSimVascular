@@ -45,6 +45,9 @@ FILES = {
     "case01_inflow.flow": "69199991dface483e50058d70d61052fa27d7aaa672eba34948dc42156e7edf6",
     "rcrt.dat": "570270a39087ce3304ef81f8d182e6535062f04491bb8c5638c1b0cc8a6e320f",
     "resistance.dat": "b6120802fce791757f1a0147eeba988804329f6e520935192835a0baafc082fe",
+    # The same aorta's inflow written another way, in scientific notation: the second table the
+    # module's own tests load, and the file its .flow reader is tested on.
+    "cap_aorta.flow": "062d290c6fed707560a8984b4cfd2278a19a97cdd29ca1a0c008184fbb288959",
 }
 MESH_ZIP = "case01_mesh.zip"
 MESH_DIR_NAME = "mesh"
@@ -90,6 +93,10 @@ class Case01:
     @property
     def centerlines_path(self) -> Path:
         return self.folder / "case01_centerlines.vtp"
+
+    @property
+    def cap_aorta_path(self) -> Path:
+        return self.folder / "cap_aorta.flow"
 
     def face_id(self, name: str) -> int:
         return next(face_id for face_id, face_name in self.names.items() if face_name == name)

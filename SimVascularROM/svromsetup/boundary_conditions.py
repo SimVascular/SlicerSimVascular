@@ -29,7 +29,7 @@ import json
 import math
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Mapping
 
 # The kinds, as the panel lists them and as they are saved.
@@ -59,10 +59,12 @@ class Inflow:
     time: tuple
     flow: tuple
     source: str = field(default="", compare=False)
-    """The file the waveform was read from, if it was one: what the table shows for it, so that
-    the condition on a cap says which file it is. Not compared -- the same numbers are the same
-    inflow wherever they came from -- and not needed to run it, since the numbers are kept with
-    the scene: a file moved or deleted since leaves the condition as it was."""
+    """The name of the file the waveform was read from, if it was one: what the table shows for
+    it, so that the condition on a cap says which file it is. Its name alone, never its folder: the
+    condition is saved with the scene, and a path can carry a patient's name or ID wherever the
+    scene goes. Not compared -- the same numbers are the same inflow wherever they came from -- and
+    not needed to run it, since the numbers are kept with the scene: a file moved or deleted since
+    leaves the condition as it was."""
     negated: bool = field(default=False, compare=False)
     """Whether the flows are the file's multiplied by -1: what the table's Invert box shows, so that
     the box says which way round a waveform is used, and opening the file is not taken to say it.
@@ -285,7 +287,7 @@ def to_json(conditions: Mapping[int, object]) -> str:
         if isinstance(condition, Inflow):
             entry = {"type": INFLOW, "t": list(condition.time), "Q": list(condition.flow)}
             if condition.source:
-                entry["file"] = condition.source
+                entry["file"] = file_name(condition.source)
             if condition.negated:
                 entry["negated"] = True
         elif isinstance(condition, RCR):
@@ -315,7 +317,7 @@ def from_json(text: str) -> dict:
             kind = entry["type"]
             if kind == INFLOW:
                 condition = Inflow(tuple(float(t) for t in entry["t"]),
-                                   tuple(float(q) for q in entry["Q"]), str(entry.get("file", "")),
+                                   tuple(float(q) for q in entry["Q"]), file_name(entry.get("file", "")),
                                    bool(entry.get("negated", False)))
             elif kind == RCR_KIND:
                 condition = RCR(float(entry["Rp"]), float(entry["C"]), float(entry["Rd"]),
@@ -411,7 +413,14 @@ def read_flow_file(path) -> Inflow:
     longer starts at 0.
     """
     times, flows = read_flow_columns(path)
-    return Inflow(tuple(times), tuple(flows), str(Path(path).resolve()))
+    return Inflow(tuple(times), tuple(flows), file_name(path))
+
+
+def file_name(path) -> str:
+    """A file's name without its folder, whichever system's separators it was written with: the
+    folder a waveform came from is not kept, and a scene saved before this kept whole paths, some
+    of them Windows'."""
+    return PureWindowsPath(str(path)).name if path else ""
 
 
 def read_flow_columns(path):

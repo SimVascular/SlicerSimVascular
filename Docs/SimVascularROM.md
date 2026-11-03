@@ -138,10 +138,10 @@ the extension, which Slicer otherwise has none for. A file is a time and a flow 
 lines starting with `#` are skipped, and so is the `points modes` line svMultiPhysics writes
 first (`256 16`). The reader asks nothing else of the numbers, so a file that would not do as an
 inflow still opens, to be looked at in Slicer's table view. The table is marked
-`SimVascularROM.FlowFile`, with the file it came from. That mark is what the **Flow table**
-selector offers tables by, so a results table or one made by hand is not offered. Slicer
-registers a reader when the module loads, so a change to it needs Slicer restarted; Reload does
-not pick it up.
+`SimVascularROM.FlowFile` = `1`. That mark is what the **Flow table** selector offers tables by,
+so a results table or one made by hand is not offered. It is not the file's path, and nothing
+else saved with the scene is either: a path can carry a patient's name or ID. An inflow read
+from a file by a script keeps the file's name alone.
 
 **A table chosen for a cap is read into the cap's condition**, and asked then for what an inflow
 needs: one cycle, starting at 0, its times increasing. A table that fails is shown in red, with
@@ -164,39 +164,35 @@ Both panels watch the tables their mesh's inflows are read from, the hidden one 
 edited is read into the conditions as the mesh has them at that moment, not as the panel last
 saw them; written back whole, a hidden panel's would undo what the other panel had changed since.
 
-**Each panel shows an inflow in its solver's sign.** svZeroDSolver takes an inflow as
-positive, into the model. svMultiPhysics measures a face's flow along its outward normal, so it
-takes an inflow as *negative*, and its own `.flow` files have it so: a header line, then
-negative flows. Nothing in a file says which it was written for. So this panel shows, draws and
-takes a typed inflow positive; SimVascular MultiPhysics shows, draws and takes it negative, and
-reads an svMultiPhysics file as it is.
+**Each panel shows an inflow in its own solver's sign.** svZeroDSolver takes an inflow as
+positive. svMultiPhysics measures a face's flow along its outward normal, so it takes an inflow
+as negative, and its own `.flow` files have it so. Nothing in a file says which solver it was
+written for.
 
-The condition kept on the mesh is one, positive into the model, whichever panel set it. Each
-panel shows it in its own sign, so nothing has to be turned round in moving a case between them:
-a cap given 5 mL/s here is -5 mL/s there. The `svromsetup` and `svmpsetup` packages take every
-condition positive in, and `svmpsetup` writes an inflow negative for svMultiPhysics, in a
-`Value` and in a `.flow` file alike. So the file is the curve the 3D panel draws.
+| | SimVascular ROM Simulation | SimVascular MultiPhysics |
+|---|---|---|
+| An inflow is shown, drawn and typed | positive | negative |
+| A file written for svMultiPhysics | Invert ticked | as it is |
+| A waveform written for a 0D solver | as it is | Invert ticked |
 
-So the selected cap's waveform is drawn under the table, every point, as this panel's solver
-takes it. It has a line at zero and its mean and range under it, and says which way is in. It
-turns orange, with a word, when its mean goes out of the model: negative here, positive in the
-3D panel. A warning sign shows beside the cap's Invert box as well, so that a cap the wrong way
-round shows in its row without being selected. **Invert**, in the table, multiplies every flow by -1, and is unticked as a table is
-chosen, which is the table as it is, in the panel's sign; the plot follows the box. The box says
-whether the curve is its table's turned round *for this panel's solver*. The same cap can be
-ticked in one panel and not the other: an svMultiPhysics file is unticked in the 3D panel and
-ticked here, and a 0D waveform the other way about. The box is kept with the condition, so it
-still says which way round the waveform is used when the scene is opened again, and it holds
-when the table is edited. Only an inflow read rather than typed has the box: a steady flow is
-typed with its sign. The status line says when a waveform is inverted, and when one given to a
-cap takes flow out of the model there.
+Behind both is one condition per cap, kept on the mesh positive into the model, which is what
+`svromsetup` and `svmpsetup` take. A cap given 5 mL/s in one panel is -5 mL/s in the other, and
+nothing has to be turned round when a case moves between them. `svmpsetup` negates an inflow
+only as it writes it for svMultiPhysics, so the file it writes is the curve the 3D panel draws.
 
-Against showing the condition with one sign in both panels and writing it as shown. That is
-what *the file is what I saw* asks for, and it holds here, in the 3D panel's sign. But with one
-sign, a waveform set up for one solver is backwards for the other, so it would have to be turned
-round every time a case moved between them. Written as given, a waveform positive into the
-model drives the flow out of an svMultiPhysics model through its inlet: the panel's test run
-showed 5 mL/s leaving the cube through its inflow cap.
+**Invert** multiplies every flow by -1. It says whether the curve is its table's turned round for
+*that panel's* solver, so the same cap can be ticked in one panel and not the other. It is
+unticked as a table is chosen, and kept with the condition. Only an inflow read from a table has
+the box: a steady flow is typed in the panel's sign.
+
+When an inflow's mean goes out of the model, the text under the curve turns orange and a warning
+sign shows beside its Invert box, so that a cap the wrong way round shows in its row without
+being selected.
+
+Against one sign in both panels: whichever sign it were, the files written for one of the two
+solvers would show backwards, and need Invert, in the panel that solves them. Simpler still would
+be svMultiPhysics taking an inflow as positive; until it does, the sign is turned round in one
+place, as `svmpsetup` writes.
 
 Drawn under the table rather than in a window that asked first, as the first version did: a
 window shows a waveform once, as it is chosen, where one under the table is there for every cap
@@ -355,44 +351,14 @@ python -m pytest
 The solver is found beside that Python, whether or not its environment is activated. To test a
 build of svZeroDSolver of your own instead, set `SVZERODSOLVER=/path/to/svzerodsolver`.
 
-The whole case is tested on a real model, `case01` of svReducedOrderModelingUtils'
+The whole-case tests, and the module's own tests under Slicer (Reload and Test), run on
+`case01` of svReducedOrderModelingUtils'
 [TESTING_DATA](https://github.com/SimVascular/svReducedOrderModelingUtils/releases/tag/TESTING_DATA)
-release: an aorta's mesh-complete, with the inflow, `rcrt.dat` and `resistance.dat` its tutorial
-gives it, and the package's own centerlines of it. The tests download it once, about 17 MB, into
-pytest's cache. Offline, set `SVROM_TESTING_DATA` to a folder holding the release's files;
-without either, the tests skip themselves and say so. They check:
-
-- that the files give every cap a condition, the inflow from its first row on;
-- that the faces are written as SimVascular's files of the same names have them;
-- that the centerlines are the release's own, to a tenth of a millimetre on average;
-- that each outlet is named after the cap its centerline ends at, asked geometrically, since four
-  of the five are resistances of 16000 and alike in every number;
-- that the vessels from the valve to each cap are in centimetres;
-- that each outlet drains as its file says, and what goes in comes out.
-
-The model came from elsewhere, so the tests compare against it rather than against what this
-package computed last time. They replaced tests on a made Y, which checked the same things
-against nothing else.
-
-`svromsetup.testing_data` fetches and reads the release, for these tests and the module's own
-alike. It checks each file against the SHA-256 GitHub publishes for it. A file that differs --
-the release changed since, or a folder of someone else's -- fails the tests by name rather than
-being tested, since what they expect was taken from these files.
-
-The tests that need `svromutils` (and VMTK) or the solver skip themselves where these are
-missing; with only numpy, VTK and pytest, 42 run. The module's own tests (`SimVascularROMTest`,
-Reload and Test) run under Slicer, on the same aorta, which they download once into Slicer's
-cache (or read from `SVROM_TESTING_DATA`); without it, the tests that need it say they were
-skipped, and the rest run. They check:
-
-- that a `.flow` file loads as a table and goes through a `.mrb`;
-- that a pre-op and a post-op of the aorta keep their own conditions;
-- that an inflow is read from the flow table chosen -- the release's inflow -- through Invert,
-  edits, saving and deletion;
-- that the plot sits under the hint in both panels;
-- that the aorta without its names is sent to Mesh Prep;
-- and the whole case on it, its conditions typed from the release's files, each outlet draining as
-  its file says.
+release, an aorta with its tutorial's boundary conditions. `svromsetup.testing_data` downloads it
+once, about 17 MB, into pytest's or Slicer's cache and checks it against the release's SHA-256
+digests; offline, set `SVROM_TESTING_DATA` to a folder holding its files, and without either the
+tests that need it are skipped. The tests that need `svromutils` (and VMTK) or the solver skip
+themselves where these are missing; with only numpy, VTK and pytest, 43 run.
 
 A `--testing` run loads none of the installed extensions, so pass SlicerVMTK's module folders as
 `--additional-module-paths`, along with `SimVascularMeshPrep` and `SimVascularROM`.
