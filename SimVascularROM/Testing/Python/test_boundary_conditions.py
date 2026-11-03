@@ -169,6 +169,15 @@ def test_a_flow_file_round_trips_and_a_negative_one_is_turned_round_and_said_to_
         bcs.read_flow_file(tmp_path / "bad.flow")
 
 
+def test_a_flow_file_written_for_svmultiphysics_is_read_without_its_header(tmp_path):
+    """Its `points modes` line skipped, and nothing else: rows whose times are whole numbers,
+    written without a decimal point, are rows, the first and last among them."""
+    (tmp_path / "3d.flow").write_text("3 16\n0 -4\n0.5 -9\n1 -4\n")
+    assert bcs.read_flow_file(tmp_path / "3d.flow") == Inflow((0.0, 0.5, 1.0), (-4.0, -9.0, -4.0))
+    (tmp_path / "plain.flow").write_text("0 4\n0.5 9\n1 4\n")
+    assert bcs.read_flow_file(tmp_path / "plain.flow") == Inflow((0.0, 0.5, 1.0), (4.0, 9.0, 4.0))
+
+
 def test_the_package_reads_the_files_as_they_are_written(tmp_path):
     """The files are written for `svromutils` to read, so its own reader is the judge."""
     pytest.importorskip("vmtk")
@@ -183,3 +192,58 @@ def test_the_package_reads_the_files_as_they_are_written(tmp_path):
     values, kinds = io_1d.read_variable_outflow_bcs(parameters)
     assert values == {"cap_right": [100.0, 1e-4, 1500.0, 10.0], "cap_left": ["200", 0.0]}
     assert kinds == {"cap_right": "rcr", "cap_left": "resistance"}
+
+
+# -- a .flow as a table, and an inflow inverted ---------------------------------------------
+def test_a_flow_file_is_read_as_its_two_columns_whatever_they_hold(tmp_path):
+    path = tmp_path / "cap.flow"
+    path.write_text("# a comment\n0.0\t-5.0\r\n0.4\t-15.0\r\n0.8\t-5.0\r\n")
+    assert bcs.read_flow_columns(path) == ([0.0, 0.4, 0.8], [-5.0, -15.0, -5.0])
+    # svMultiPhysics' header is not a row: 3 points, 16 Fourier coefficients.
+    path.write_text("3 16\n0.0 -5.0\n0.4 -15.0\n0.8 -5.0\n")
+    assert bcs.read_flow_columns(path) == ([0.0, 0.4, 0.8], [-5.0, -15.0, -5.0])
+    # Nothing asked of the numbers, as a table shows them: not from 0, not increasing.
+    path.write_text("0.5 1\n0.2 2\n")
+    assert bcs.read_flow_columns(path) == ([0.5, 0.2], [1.0, 2.0])
+    path.write_text("0.0 1\nfoo bar\n")
+    with pytest.raises(BoundaryConditionError, match="line 2: expected a time and a flow"):
+        bcs.read_flow_columns(path)
+
+
+def test_an_inverted_inflow_says_so_and_keeps_saying_so(tmp_path):
+    path = tmp_path / "inflow.flow"
+    path.write_text("0.0 -5.0\n0.4 -15.0\n0.8 -5.0\n")
+    inverted = bcs.read_flow_file(path).flipped()
+    assert inverted.negated and inverted.flow == (5.0, 15.0, 5.0)
+    assert not inverted.flipped().negated, "inverted twice is the file as it is"
+    back = bcs.from_json(bcs.to_json({2: inverted}))[2]
+    assert back.negated and back == inverted and back.source == inverted.source
+
+
+def test_a_condition_is_typed_one_value_to_a_box():
+    """By name, in the order the boxes are labelled; the missing named, the unreadable named."""
+    assert bcs.from_fields(bcs.RCR_KIND, ["100", "1e-4", "1500"]) == RCR(100.0, 1e-4, 1500.0, 0.0)
+    assert bcs.from_fields(bcs.RCR_KIND, ["100", "1e-4", "1500", "1333.22"]) == RCR(100.0, 1e-4, 1500.0, 1333.22)
+    assert bcs.from_fields(bcs.RESISTANCE_KIND, [" 250 "]) == Resistance(250.0)
+    assert bcs.from_fields(bcs.INFLOW, ["-7"], period=0.8) == Inflow.steady(-7.0, 0.8)
+
+    assert bcs.from_fields(bcs.RCR_KIND, ["100", "", "1500"]) is None, "incomplete is not a condition"
+    assert bcs.missing_fields(bcs.RCR_KIND, ["100", "", "1500"]) == ["C"]
+    assert bcs.missing_fields(bcs.RCR_KIND, ["1", "2", "3"]) == [], "Pd may be left out"
+    assert bcs.from_fields(bcs.INFLOW, []) is None
+    for fields, name in ((["100", "1,5e-4", "1500"], "C"), (["inf"], "R")):
+        kind = bcs.RCR_KIND if len(fields) == 3 else bcs.RESISTANCE_KIND
+        with pytest.raises(bcs.FieldError) as raised:
+            bcs.from_fields(kind, fields)
+        assert raised.value.name == name
+
+
+def test_a_condition_is_shown_in_its_boxes_as_it_reads_back():
+    """Every value as the number it is, not six figures of it: a box is read back whenever another
+    of the same condition's is edited."""
+    rcr = RCR(121.0, 1.234567891e-4, 1212.0, 0.0)
+    assert bcs.fields_of(rcr) == ["121", "0.0001234567891", "1212", "0"]
+    assert bcs.from_fields(bcs.RCR_KIND, bcs.fields_of(rcr)) == rcr
+    assert bcs.fields_of(Inflow.steady(-12.0)) == ["-12"]
+    assert bcs.fields_of(Inflow((0.0, 0.5, 1.0), (1.0, 2.0, 1.0))) == [""], "a waveform has no box"
+    assert bcs.fields_of(None) == []

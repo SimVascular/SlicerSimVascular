@@ -19,11 +19,13 @@ set(MODULE_PYTHON_SCRIPTS
   svromsetup/network.py
   svromsetup/results.py
   svromsetup/solver.py
-  svromsetup/testing.py
+  svromsetup/testing_data.py
   )
 
 set(MODULE_PYTHON_RESOURCES
   Resources/UI/${MODULE_NAME}.ui
+  # A waveform for the .flow reader's self-test: the tutorial aorta's inflow.
+  Resources/cap_aorta.flow
   LICENSE.txt
   )
 

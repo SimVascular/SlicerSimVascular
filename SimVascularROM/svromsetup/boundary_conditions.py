@@ -63,6 +63,10 @@ class Inflow:
     the condition on a cap says which file it is. Not compared -- the same numbers are the same
     inflow wherever they came from -- and not needed to run it, since the numbers are kept with
     the scene: a file moved or deleted since leaves the condition as it was."""
+    negated: bool = field(default=False, compare=False)
+    """Whether the flows are the file's multiplied by -1: what the table's Invert box shows, so that
+    the box says which way round a waveform is used, and opening the file is not taken to say it.
+    Not compared, as the source is not: the numbers are the inflow."""
     kind = INFLOW
 
     def __post_init__(self):
@@ -99,7 +103,7 @@ class Inflow:
         return total / self.period
 
     def flipped(self) -> "Inflow":
-        return Inflow(self.time, tuple(-q for q in self.flow), self.source)
+        return Inflow(self.time, tuple(-q for q in self.flow), self.source, not self.negated)
 
 
 @dataclass(frozen=True)
@@ -192,6 +196,85 @@ def _number(value: float) -> str:
     return f"{value:.6g}"
 
 
+# -- as typed in the table's boxes, one to a value --------------------------------
+# The values a condition can be given without: an RCR's distal pressure, which is then 0.
+OPTIONAL_VALUES = {RCR_KIND: ("Pd",)}
+
+
+class FieldError(BoundaryConditionError):
+    """A value that cannot be read, and which of its condition's values it is: so that the box it
+    was typed in, and not the whole condition, can be shown wrong."""
+
+    def __init__(self, name: str, message: str):
+        super().__init__(message)
+        self.name = name
+
+
+def fields_of(condition) -> list:
+    """A condition's values as the table's boxes show them, in `VALUE_ORDER`'s order.
+
+    Written to round-trip rather than to six figures, as `to_text` writes them: a box is read back
+    whenever another of the same condition's is edited, so a value shown short would be replaced
+    by its own rounding without anyone having typed it. A waveform has no box to show it in -- a
+    steady flow typed in its Q replaces it -- and is left for the table to describe.
+    """
+    if condition is None:
+        return []
+    if isinstance(condition, Inflow):
+        return [_field(condition.flow[0]) if condition.is_steady and not condition.source else ""]
+    if isinstance(condition, RCR):
+        return [_field(value) for value in (condition.Rp, condition.C, condition.Rd, condition.Pd)]
+    if isinstance(condition, Resistance):
+        return [_field(condition.R)]
+    raise BoundaryConditionError(f"Not a boundary condition: {condition!r}")
+
+
+def missing_fields(kind: str, fields) -> list:
+    """The values `kind` needs that are left empty in `fields`, by name."""
+    fields = list(fields) + [""] * (len(VALUE_ORDER[kind]) - len(fields))
+    return [name for name, text in zip(VALUE_ORDER[kind], fields)
+            if not (text or "").strip() and name not in OPTIONAL_VALUES.get(kind, ())]
+
+
+def from_fields(kind: str, fields, period: float = 1.0):
+    """A condition of `kind` from its values typed one to a box, in `VALUE_ORDER`'s order; None
+    while a value it needs is left empty, for the table to say which.
+
+    One box to a value rather than one cell for them all, so that the order is the boxes' labels'
+    and no longer something to remember, and a value that cannot be read is shown as the one
+    value it is, by a `FieldError` naming it. `period` is what a steady inflow is spread over, as
+    for `from_text`.
+    """
+    names = VALUE_ORDER[kind]
+    fields = [(text or "").strip() for text in fields] + [""] * (len(names) - len(fields))
+    values = []
+    for name, text in zip(names, fields):
+        if not text:
+            values.append(None)
+            continue
+        try:
+            value = float(text)
+        except ValueError:
+            raise FieldError(name, f"{name}: could not read {text!r} as a number.") from None
+        if not math.isfinite(value):
+            raise FieldError(name, f"{name} has to be a finite number.")
+        values.append(value)
+    if missing_fields(kind, fields):
+        return None
+    if kind == INFLOW:
+        return Inflow.steady(values[0], period)
+    if kind == RCR_KIND:
+        Rp, C, Rd, Pd = values
+        return RCR(Rp, C, Rd, 0.0 if Pd is None else Pd)
+    return Resistance(values[0])
+
+
+def _field(value: float) -> str:
+    """A value as a box shows it: the shortest text that reads back as the same number."""
+    text = repr(float(value))
+    return text[:-2] if text.endswith(".0") else text
+
+
 # -- kept on the mesh -----------------------------------------------------------
 def to_json(conditions: Mapping[int, object]) -> str:
     """`{"<face id>": {...}}`, sorted, so a scene saved twice untouched is the same bytes twice."""
@@ -203,6 +286,8 @@ def to_json(conditions: Mapping[int, object]) -> str:
             entry = {"type": INFLOW, "t": list(condition.time), "Q": list(condition.flow)}
             if condition.source:
                 entry["file"] = condition.source
+            if condition.negated:
+                entry["negated"] = True
         elif isinstance(condition, RCR):
             entry = {"type": RCR_KIND, "Rp": condition.Rp, "C": condition.C, "Rd": condition.Rd,
                      "Pd": condition.Pd}
@@ -230,7 +315,8 @@ def from_json(text: str) -> dict:
             kind = entry["type"]
             if kind == INFLOW:
                 condition = Inflow(tuple(float(t) for t in entry["t"]),
-                                   tuple(float(q) for q in entry["Q"]), str(entry.get("file", "")))
+                                   tuple(float(q) for q in entry["Q"]), str(entry.get("file", "")),
+                                   bool(entry.get("negated", False)))
             elif kind == RCR_KIND:
                 condition = RCR(float(entry["Rp"]), float(entry["C"]), float(entry["Rd"]),
                                 float(entry.get("Pd", 0.0)))
@@ -311,27 +397,49 @@ def with_period(condition, period: float):
 def read_flow_file(path) -> Inflow:
     """A waveform from a `.flow` file: time and flow per line, space- or comma-separated.
 
-    As written, sign and all. A file made for svMultiPhysics has two integer values for the
-    number of time points in the file and the number of Fourier modes used to interpolate
-    flow values. The flow values for an inflow are *negative* --
-    its flow is measured along the outward normal -- and the reduced-order solvers take it as
-    positive. Which one a file is cannot be read off the file, so the caller says so: the panels
-    plot it and ask, and `as_inflow` guesses from the mean for a script that has to.
+    As written, sign and all. A file made for svMultiPhysics opens with two integers, the number
+    of time points in the file and the number of Fourier modes its flow is interpolated with
+    (`256 16`), which are skipped; and gives an inflow as *negative* -- its flow is measured along
+    the outward normal -- where the reduced-order solvers take it as positive. Which one a file is
+    cannot be read off the file, so the caller says so: the panels draw it and leave it to their
+    Invert box, and `as_inflow` guesses from the mean for a script that has to.
+
+    The rows are `read_flow_columns`', so that a script and a panel's table read a file alike, and
+    the header is told from a row as that says. Not by taking any line whose time is a whole
+    number for it: that drops every row whose time is written without a decimal point -- `0 4`,
+    `1 4`, as this package's own `write_flow_file` writes them -- and leaves a waveform that no
+    longer starts at 0.
     """
-    times, flows = [], []
-    for number, line in enumerate(Path(path).read_text().splitlines(), start=1):
-        values = [value for value in _SEPARATORS.split(line.strip()) if value]
-        if not values or values[0].startswith("#"):
+    times, flows = read_flow_columns(path)
+    return Inflow(tuple(times), tuple(flows), str(Path(path).resolve()))
+
+
+def read_flow_columns(path):
+    """A `.flow` file's two columns, time and flow, as the numbers it holds: for a table to show,
+    not a waveform to solve, so nothing is asked of them -- the times need not start at 0 or
+    increase, as `read_flow_file`'s must.
+
+    `#` lines are skipped, and so is svMultiPhysics' header, the number of points and of Fourier
+    coefficients (`256 16`), which would otherwise stand first in the table as 256 s of 16 mL/s.
+    Taken as the header only when it is two whole numbers and the first counts the rows after it:
+    a waveform's own first row is at time 0. A row that is not two numbers is refused by its line.
+    """
+    rows, first = [], None
+    for number, line in enumerate(Path(path).read_text(errors="replace").splitlines(), start=1):
+        fields = [value for value in _SEPARATORS.split(line.strip()) if value]
+        if not fields or fields[0].startswith("#"):
             continue
         try:
-            if not values[0].isdigit():
-                times.append(float(values[0]))
-                flows.append(float(values[1]))
+            rows.append((float(fields[0]), float(fields[1])))
         except (IndexError, ValueError):
             raise BoundaryConditionError(
-                f"{path}, line {number}: expected a time and a flow, found {line.strip()!r}."
-            ) from None
-    return Inflow(tuple(times), tuple(flows), str(Path(path).resolve()))
+                f"{path}, line {number}: expected a time and a flow, found {line.strip()!r}.") from None
+        if first is None:
+            first = fields
+    if (first is not None and len(first) == 2 and all(re.fullmatch(r"\+?\d+", value) for value in first)
+            and int(first[0]) == len(rows) - 1):
+        rows = rows[1:]
+    return [time for time, _flow in rows], [flow for _time, flow in rows]
 
 
 def as_inflow(waveform: Inflow):
@@ -340,9 +448,9 @@ def as_inflow(waveform: Inflow):
     A waveform whose mean is negative is taken to be one written for svMultiPhysics, where
     inflow is negative, rather than a flow out of the model: an outlet prescribing flow is
     not something the panels offer. Returned with a flag rather than flipped quietly, so that a
-    caller can say it did. Not what the panels do: they plot the waveform and leave negating it to
-    the user (`SimVascularROMLib.BoundaryConditionsTable.WaveformReview`), since a waveform that
-    is mostly backflow has a negative mean too.
+    caller can say it did. Not what the panels do: they draw the waveform under their table and
+    leave turning it round to the user's Invert box, since a waveform that is mostly backflow has
+    a negative mean too.
     """
     if waveform.mean < 0:
         return waveform.flipped(), True

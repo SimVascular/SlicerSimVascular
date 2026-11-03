@@ -200,8 +200,13 @@ def write_flow_file(path, inflow: Inflow, coefficients: int) -> None:
     and which smooths a waveform into very nearly a sinusoid without a word. It is written from
     the series, so that it cannot disagree with the lines under it: the solver reads that many
     lines and stops early or runs out otherwise.
+
+    Negated here, as a steady inflow's `Value` is: the conditions are svromsetup's, positive into
+    the model, and svMultiPhysics takes a positive flow at a Dirichlet face as going out along its
+    outward normal -- written as given, a waveform drives the flow out of the model through the
+    inlet. The panel shows an inflow negative, as it is written, so the file is the curve drawn.
     """
     lines = [f"{len(inflow.time)} {int(coefficients)}"]
-    lines += [f"{float(t)!r} {float(q)!r}" for t, q in zip(inflow.time, inflow.flow)]
+    lines += [f"{float(t)!r} {-float(q)!r}" for t, q in zip(inflow.time, inflow.flow)]
     with open(path, "w", newline="\n") as handle:
         handle.write("\n".join(lines) + "\n")

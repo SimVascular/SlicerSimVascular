@@ -87,7 +87,7 @@
       <item>
        <widget class="QTableWidget" name="facesTable">
         <property name="toolTip">
-         <string>One row per cap. Selecting a row shows that cap in the 3D view. Choose the kind of condition, then double-click its values to type them in the order the hint below says. An inflow's waveform is loaded by double-clicking its values, which asks for a .flow file; a steady inflow is typed by selecting the cell and typing the flow. Values are cgs: flow mL/s, resistance dyn·s/cm⁵, compliance cm⁵/dyn, pressure dyn/cm² (1 mmHg = 1333.22).</string>
+         <string>One row per cap. Selecting a row shows that cap in the 3D view. Choose the kind of condition, then type its values, one to a labelled box; hover over a label for what it is and its units. An inflow's waveform is chosen in the Flow table column, from the .flow files dropped on Slicer, and drawn under the table, with Invert to turn it the right way up; a steady inflow is typed in its Q box instead. Here an inflow is negative, as svMultiPhysics takes it and its own .flow files have it: tick Invert for a waveform from the ROM panel. Values are cgs: flow mL/s, resistance dyn·s/cm⁵, compliance cm⁵/dyn, pressure dyn/cm² (1 mmHg = 1333.22).</string>
         </property>
         <property name="minimumSize">
          <size>

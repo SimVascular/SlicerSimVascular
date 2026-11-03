@@ -58,9 +58,12 @@ cd FaceAwareRemesh && PYTHONPATH=. python -m unittest discover -s tests
 cd SimVascularMeshPrep && python -m pytest
 ```
 
-**svromsetup** — pytest; 26 tests with numpy and VTK alone, the rest skip unless
-`svromutils` (with VMTK) and svZeroDSolver are installed. Both are on PyPI. Install them into
-the test environment (outside Slicer, their VMTK and VTK are fine) to run them all:
+**svromsetup** — pytest; 42 tests with numpy and VTK alone, the rest skip unless
+`svromutils` (with VMTK) and svZeroDSolver are installed. Both are on PyPI. The whole-case tests
+also need svReducedOrderModelingUtils' TESTING_DATA release (`case01`, about 17 MB), which they
+download into pytest's cache on first run; offline, set `SVROM_TESTING_DATA` to a folder holding
+its files. Install the packages into the test environment (outside Slicer, their VMTK and VTK are
+fine) to run them all:
 
 ```sh
 cd SimVascularROM && python -m pip install svromutils svzerod && python -m pytest
@@ -105,6 +108,11 @@ runs unchanged:
   is invisible headless. Use `Clear()` and remove the parameter node by hand instead.
 - **Drop `--disable-cli-modules`** for anything that preprocesses a surface, which decimates
   through the `decimation` CLI module.
+- **SimVascular ROM Simulation's self-tests run on a real aorta**, `case01` of
+  svReducedOrderModelingUtils' TESTING_DATA release, which `svromsetup.testing_data` downloads
+  into `slicer.app.cachePath` on the first run and checks against GitHub's SHA-256s. Offline, set
+  `SVROM_TESTING_DATA` to a folder holding its files; without either, the tests that need it say
+  they were skipped. A file that differs from the release's fails them instead.
 - `--testing` uses a throwaway settings file, so no module is registered from the user's
   configured paths — pass `--additional-module-paths` for anything that needs
   `slicer.util.getModuleWidget`.
