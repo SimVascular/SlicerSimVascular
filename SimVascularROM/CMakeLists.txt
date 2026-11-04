@@ -19,7 +19,7 @@ set(MODULE_PYTHON_SCRIPTS
   svromsetup/network.py
   svromsetup/results.py
   svromsetup/solver.py
-  svromsetup/testing.py
+  svromsetup/testing_data.py
   )
 
 set(MODULE_PYTHON_RESOURCES

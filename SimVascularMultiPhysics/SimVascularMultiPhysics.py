@@ -93,7 +93,10 @@ from svromsetup import boundary_conditions as bcs
 from SimVascularROMLib.BoundaryConditionsTable import (  # noqa: F401 (the tests use these)
     BOUNDARY_CONDITIONS_ATTRIBUTE,
     FACE_NAMES_ATTRIBUTE,
+    INTO_THE_MODEL_NEGATIVE,
+    INVERT_COLUMN,
     KIND_CHOICES,
+    TABLE_COLUMN,
     TYPE_COLUMN,
     VALUES_COLUMN,
     BoundaryConditionsTable,
@@ -214,7 +217,8 @@ class SimVascularMultiPhysicsWidget(ScriptedLoadableModuleWidget, VTKObservation
         self.conditionsTable = BoundaryConditionsTable(
             self.ui.facesTable, self.ui.valuesHintLabel, self.setStatus,
             changed=self.onConditionsChanged,
-            startDirectory=lambda: self.ui.outputDirectoryPathLineEdit.currentPath)
+            # Shown as svMultiPhysics takes it, and as its own .flow files have it: negative in.
+            inflowSign=INTO_THE_MODEL_NEGATIVE)
         self.buildSettings()
 
         self.ui.inputMeshSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.onMeshChanged)
@@ -1272,6 +1276,8 @@ class SimVascularMultiPhysicsTest(ScriptedLoadableModuleTest):
         self.setUp()
         self.test_theConditionsAreTheROMPanelsOwn()
         self.setUp()
+        self.test_anInflowIsShownInEachSolversSign()
+        self.setUp()
         self.test_aSettingIsKeptAndATypoRefused()
         self.setUp()
         self.test_theSolverFilesAreWritten()
@@ -1308,9 +1314,13 @@ class SimVascularMultiPhysicsTest(ScriptedLoadableModuleTest):
 
     @staticmethod
     def typeCondition(table, faceId, kind, text):
+        """A kind chosen for a cap, and `text`'s comma-separated values typed in its boxes, each
+        left as a person leaves it."""
         row = table.rowOf(faceId)
         table.table.cellWidget(row, TYPE_COLUMN).currentIndex = KIND_CHOICES.index(kind)
-        table.table.item(row, VALUES_COLUMN).setText(text)
+        for box, value in zip(table.valueBoxes(faceId), text.split(",") if text else []):
+            box.text = value.strip()
+            box.editingFinished()
 
     def test_theConditionsAreTheROMPanelsOwn(self):
         """Set in either panel, seen in the other: one set per mesh."""
@@ -1325,10 +1335,82 @@ class SimVascularMultiPhysicsTest(ScriptedLoadableModuleTest):
         widget.ui.inputMeshSelector.setCurrentNode(node)
         self.assertEqual(widget.conditionsTable.conditions,
                          {testing.OUTLET_ID: bcs.RCR(100.0, 1e-4, 1000.0, 0.0)})
-        self.typeCondition(widget.conditionsTable, testing.INLET_ID, bcs.INFLOW, "12")
+        # Typed in svMultiPhysics' sign, negative in, and kept -- and shown in the 0D panel -- in
+        # the 0D solvers', positive in.
+        self.typeCondition(widget.conditionsTable, testing.INLET_ID, bcs.INFLOW, "-12")
         rom.enter()
         self.assertEqual(rom.conditionsTable.conditions[testing.INLET_ID], bcs.Inflow.steady(12.0))
+        self.assertEqual(rom.conditionsTable.valueBoxes(testing.INLET_ID)[0].text, "12")
+        self.assertEqual(widget.conditionsTable.valueBoxes(testing.INLET_ID)[0].text, "-12")
         self.delayDisplay("The conditions are shared with the ROM panel")
+
+    def flowTable(self, text, name):
+        """A .flow file of `text`, loaded as a user loads one: by the ROM module's reader, as a table."""
+        import tempfile
+
+        path = os.path.join(tempfile.mkdtemp(), f"{name}.flow")
+        with open(path, "w") as handle:
+            handle.write(text)
+        return slicer.util.loadNodeFromFile(path)
+
+    def test_anInflowIsShownInEachSolversSign(self):
+        """A file written for svMultiPhysics, header and negative flows, is taken here as it is, and
+        is the 0D panel's turned round; one for a 0D solver is the other way about, and said here
+        to take flow out. Kept once, positive in, and written negative: the curve drawn here."""
+        import tempfile
+
+        from svmeshcomplete import testing
+
+        node = self.namedCube()
+        widget = self.widget()
+        widget.ui.inputMeshSelector.setCurrentNode(node)
+        table, conditions = widget.ui.facesTable, widget.conditionsTable
+        row = conditions.rowOf(testing.INLET_ID)
+        self.typeCondition(conditions, testing.INLET_ID, bcs.INFLOW, "")
+        svmp = self.flowTable("3 16\n0.0 -5.0\n0.4 -15.0\n0.8 -5.0\n", "svmultiphysics")
+        table.cellWidget(row, TABLE_COLUMN).setCurrentNode(svmp)
+        plot = conditions.plot
+        self.assertEqual([plot.curve.GetValue(i, 1).ToDouble() for i in range(plot.curve.GetNumberOfRows())],
+                         [-5.0, -15.0, -5.0], "drawn as the file has it, as svMultiPhysics takes it")
+        self.assertEqual(table.item(row, INVERT_COLUMN).checkState(), qt.Qt.Unchecked)
+        self.assertTrue(table.item(row, INVERT_COLUMN).icon().isNull(), "no warning beside the box")
+        self.assertIn("Into the model is negative", plot.summaryLabel.text)
+        self.assertEqual(plot.summaryLabel.styleSheet, "", "nothing to warn of")
+        self.assertEqual(conditions.conditions[testing.INLET_ID].flow, (5.0, 15.0, 5.0), "kept positive in")
+
+        # The 0D panel shows the same cap positive, as its solvers take it, the file turned round.
+        rom = slicer.util.getModuleWidget("SimVascularROM")
+        rom.ui.inputMeshSelector.setCurrentNode(node)
+        rom.conditionsTable.table.selectRow(rom.conditionsTable.rowOf(testing.INLET_ID))
+        self.assertEqual(rom.conditionsTable.plot.curve.GetValue(1, 1).ToDouble(), 15.0)
+        self.assertEqual(rom.ui.facesTable.item(rom.conditionsTable.rowOf(testing.INLET_ID),
+                                                INVERT_COLUMN).checkState(), qt.Qt.Checked)
+        self.assertIn("Into the model is positive", rom.conditionsTable.plot.summaryLabel.text)
+
+        # Written as drawn here: negative.
+        widget.enter()
+        self.typeCondition(conditions, testing.OUTLET_ID, bcs.RESISTANCE_KIND, "1000")
+        directory = tempfile.mkdtemp()
+        widget.ui.outputDirectoryPathLineEdit.currentPath = directory
+        widget.createSolverFiles()
+        with open(os.path.join(directory, "cap_inlet.flow")) as handle:
+            self.assertEqual(handle.read().split("\n")[1:4], ["0.0 -5.0", "0.4 -15.0", "0.8 -5.0"])
+
+        # A 0D waveform, positive, takes flow out as it is: said, in orange, until it is inverted.
+        zeroD = self.flowTable("0.0 5.0\n0.4 15.0\n0.8 5.0\n", "rom")
+        table.cellWidget(row, TABLE_COLUMN).setCurrentNode(zeroD)
+        self.assertEqual(conditions.conditions[testing.INLET_ID].flow, (-5.0, -15.0, -5.0))
+        self.assertIn("mean is positive", plot.summaryLabel.text)
+        self.assertNotEqual(plot.summaryLabel.styleSheet, "")
+        self.assertIn("mean is positive", widget.ui.statusLabel.text)
+        self.assertFalse(table.item(row, INVERT_COLUMN).icon().isNull(), "a warning beside the box")
+        self.assertIn("mean is positive", table.item(row, INVERT_COLUMN).toolTip())
+        table.item(row, INVERT_COLUMN).setCheckState(qt.Qt.Checked)
+        self.assertEqual(conditions.conditions[testing.INLET_ID].flow, (5.0, 15.0, 5.0))
+        self.assertEqual(plot.curve.GetValue(1, 1).ToDouble(), -15.0)
+        self.assertEqual(plot.summaryLabel.styleSheet, "")
+        self.assertTrue(table.item(row, INVERT_COLUMN).icon().isNull(), "gone once it is the right way round")
+        self.delayDisplay("An inflow is shown in each solver's sign")
 
     def test_aSettingIsKeptAndATypoRefused(self):
         """A changed setting is saved with the scene; one svMultiPhysics would misread is refused."""
@@ -1338,7 +1420,7 @@ class SimVascularMultiPhysicsTest(ScriptedLoadableModuleTest):
         node = self.namedCube()
         widget.ui.inputMeshSelector.setCurrentNode(node)
         widget.ui.outputDirectoryPathLineEdit.currentPath = slicer.app.temporaryPath
-        self.typeCondition(widget.conditionsTable, testing.INLET_ID, bcs.INFLOW, "10")
+        self.typeCondition(widget.conditionsTable, testing.INLET_ID, bcs.INFLOW, "-10")
         self.typeCondition(widget.conditionsTable, testing.OUTLET_ID, bcs.RESISTANCE_KIND, "1000")
         self.assertTrue(widget.ui.createSolverFilesButton.enabled)
 
@@ -1366,7 +1448,7 @@ class SimVascularMultiPhysicsTest(ScriptedLoadableModuleTest):
         widget.ui.inputMeshSelector.setCurrentNode(node)
         directory = tempfile.mkdtemp()
         widget.ui.outputDirectoryPathLineEdit.currentPath = directory
-        self.typeCondition(widget.conditionsTable, testing.INLET_ID, bcs.INFLOW, "10")
+        self.typeCondition(widget.conditionsTable, testing.INLET_ID, bcs.INFLOW, "-10")
         self.typeCondition(widget.conditionsTable, testing.OUTLET_ID, bcs.RCR_KIND, "121, 1.5e-4, 1212")
         said = widget.createSolverFiles()
         self.assertIn("3 faces", said)
@@ -1384,7 +1466,8 @@ class SimVascularMultiPhysicsTest(ScriptedLoadableModuleTest):
         widget.ui.inputMeshSelector.setCurrentNode(node)
         directory = os.path.join(tempfile.mkdtemp(), "cube")
         widget.ui.outputDirectoryPathLineEdit.currentPath = directory
-        self.typeCondition(widget.conditionsTable, testing.INLET_ID, bcs.INFLOW, "10")
+        # In svMultiPhysics' sign, as the panel takes it: negative, into the cube.
+        self.typeCondition(widget.conditionsTable, testing.INLET_ID, bcs.INFLOW, "-10")
         self.typeCondition(widget.conditionsTable, testing.OUTLET_ID, bcs.RCR_KIND, "121, 1.5e-4, 1212")
         return directory
 
@@ -1456,20 +1539,16 @@ class SimVascularMultiPhysicsTest(ScriptedLoadableModuleTest):
         self.delayDisplay("The time step is estimated from the CFL, or typed")
 
     def giveTheInletAWaveform(self, widget):
-        """A 0.8 s waveform through the cube's inlet, chosen as a user chooses its file."""
-        import tempfile
-
+        """A 0.8 s waveform through the cube's inlet, as a user gives it one: a file written for
+        svMultiPhysics, header and negative flows, loaded as a table by the ROM module's reader, and
+        that table chosen in the inlet's row."""
         from svmeshcomplete import testing
 
-        flow = os.path.join(tempfile.mkdtemp(), "cap_inlet.flow")
-        with open(flow, "w") as handle:
-            handle.write("0.0 5.0\n0.4 15.0\n0.8 5.0\n")
+        tableNode = self.flowTable("3 16\n0.0 -5.0\n0.4 -15.0\n0.8 -5.0\n", "cap_inlet")
         table = widget.conditionsTable
-        table.chooseWaveformFile = lambda _directory: flow
-        table.reviewWaveform = lambda _waveform, _faceId: False    # positive already: as it is
-        table.onCellDoubleClicked(table.rowOf(testing.INLET_ID), VALUES_COLUMN)
-        del table.chooseWaveformFile
-        del table.reviewWaveform
+        # Choosing a table is activating it, which setCurrentNode does as a click does.
+        widget.ui.facesTable.cellWidget(table.rowOf(testing.INLET_ID), TABLE_COLUMN).setCurrentNode(tableNode)
+        self.assertEqual(table.conditions[testing.INLET_ID].flow, (5.0, 15.0, 5.0))
 
     def test_aSavingTypedWithTheCFLIsKeptAsTyped(self):
         """Estimated, the saving is adapted to the step; a saving setting typed is the user's, kept

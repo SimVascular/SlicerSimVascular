@@ -99,9 +99,16 @@ from svromsetup import case, network, results, solver
 # are Mesh Prep's and the conditions one set per mesh, whichever solver they are written for.
 from SimVascularROMLib.BoundaryConditionsTable import (  # noqa: F401 (the tests use these)
     BOUNDARY_CONDITIONS_ATTRIBUTE,
+    COLUMNS,
     FACE_NAMES_ATTRIBUTE,
+    FLOW_FILE_ATTRIBUTE,
+    FLOW_TIME_COLUMN,
+    FLOW_VALUE_COLUMN,
+    INFLOW_TABLE_ROLE,
     INVALID_VALUES_COLOR,
+    INVERT_COLUMN,
     KIND_CHOICES,
+    TABLE_COLUMN,
     TYPE_COLUMN,
     VALUES_COLUMN,
     BoundaryConditionsTable,
@@ -274,6 +281,66 @@ class SimVascularROM(ScriptedLoadableModule):
         )
 
 
+# The file type the reader registers: what Slicer's Add Data names a .flow file as. The table it
+# makes is marked as BoundaryConditionsTable's FLOW_FILE_ATTRIBUTE says, which is the table's to
+# say, since it is what the Flow table selector filters by.
+FLOW_FILE_TYPE = "SimVascularFlowFile"
+
+
+class SimVascularROMFileReader:
+    """`.flow` files -- a waveform, a time and a flow per line -- loaded as table nodes.
+
+    Found by Slicer by its name, `<module>FileReader`, when the module loads, so that dropping a
+    `.flow` file on the window, or Add Data, gives a node rather than "no reader for this file".
+    A table of two columns, time in s and flow in mL/s, rather than the file's text: numbers to
+    look at, plot and sort in Slicer's own table and plot views, and saved with the scene as
+    Slicer saves any table, which reads back without this reader. Read as numbers and nothing more
+    -- `svromsetup.boundary_conditions.read_flow_columns` -- so a file the waveform reader would
+    refuse, its times not from 0 or not increasing, still opens to be seen. Not reloaded by Reload,
+    as no scripted reader is: a change here needs Slicer restarted.
+    """
+
+    def __init__(self, parent):
+        self.parent = parent
+
+    def description(self):
+        return _("SimVascular flow waveform")
+
+    def fileType(self):
+        return FLOW_FILE_TYPE
+
+    def extensions(self):
+        return [_("SimVascular flow waveform") + " (*.flow)"]
+
+    def canLoadFile(self, filePath):
+        # By extension: whether its lines are numbers is for loading it to say, with the line.
+        return bool(self.parent.supportedNameFilters(filePath))
+
+    def load(self, properties):
+        try:
+            filePath = properties["fileName"]
+            name = properties.get("name") or slicer.mrmlScene.GenerateUniqueName(
+                os.path.splitext(os.path.basename(filePath))[0])
+            times, flows = bcs.read_flow_columns(filePath)
+            node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLTableNode", name)
+            slicer.util.updateTableFromArray(node, [np.array(times, dtype=float), np.array(flows, dtype=float)],
+                                             [FLOW_TIME_COLUMN, FLOW_VALUE_COLUMN])
+            node.SetColumnUnitLabel(FLOW_TIME_COLUMN, "s")
+            node.SetColumnUnitLabel(FLOW_VALUE_COLUMN, "mL/s")
+            node.SetColumnDescription(FLOW_VALUE_COLUMN, _("Flow, as the file has it: a file written "
+                                                           "for svMultiPhysics has an inflow negative."))
+            # Marked as read from a .flow file, and not with the file's path: a path can carry a
+            # patient's name or ID, and the attribute goes wherever the scene does.
+            node.SetAttribute(FLOW_FILE_ATTRIBUTE, "1")
+        except Exception as error:
+            logging.exception("SimVascular ROM could not read the flow file.")
+            self.parent.userMessages().AddMessage(
+                vtk.vtkCommand.ErrorEvent, _("Could not read the flow file: {error}").format(error=error))
+            return False
+        self.parent.loadedNodes = [node.GetID()]
+        return True
+
+
 class SimVascularROMWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
     def __init__(self, parent=None):
         ScriptedLoadableModuleWidget.__init__(self, parent)
@@ -317,8 +384,7 @@ class SimVascularROMWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.logic = SimVascularROMLogic()
         self.conditionsTable = BoundaryConditionsTable(
             self.ui.facesTable, self.ui.valuesHintLabel, self.setStatus,
-            changed=self.updateButtons, selectionChanged=self.onCapsSelected,
-            startDirectory=lambda: self.ui.caseDirectoryPathLineEdit.currentPath)
+            changed=self.updateButtons, selectionChanged=self.onCapsSelected)
         self.conditionsTable.emphasisNote = _("The source: the centerlines start here.")
 
         self.ui.inputMeshSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.onMeshChanged)
@@ -815,7 +881,7 @@ class SimVascularROMWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
     def chooseExportFile(self):
         """Where the results are to be written, or "" if nowhere was chosen.
 
-        Its own method, as chooseWaveformFile is, so that a test can answer it. Suggested in the
+        Its own method, so that a test can answer it in place of a person. Suggested in the
         output folder, beside the solver's own per-segment results, under a name that says it is
         the per-cap one; not after the model, which the output folder is already named for.
         """
@@ -1182,15 +1248,59 @@ class SimVascularROMTest(ScriptedLoadableModuleTest):
 
     def runTest(self):
         self.setUp()
+        self.test_aFlowFileLoadsAsATable()
+        self.setUp()
         self.test_conditionsAreKeptOnTheMeshTheyAreFor()
         self.setUp()
-        self.test_doubleClickingAnInflowLoadsItsWaveform()
+        self.test_anInflowIsReadFromTheFlowTableChosen()
         self.setUp()
-        self.test_aWaveformIsPlottedAndNegatedOnlyIfAsked()
+        self.test_theWaveformIsDrawnUnderTheTableInBothPanels()
         self.setUp()
         self.test_aMeshWithoutNamesIsSentToMeshPrep()
         self.setUp()
-        self.test_aWholeCaseOnAY()
+        self.test_aWholeCaseOnTheTestingAorta()
+
+    def test_aFlowFileLoadsAsATable(self):
+        """A .flow file, found as a drop finds it -- by its extension -- is a table of its two columns,
+        time and flow, every row the file's, marked as a .flow file's; and goes out with the scene and
+        back, to the six significant figures Slicer writes a table's numbers to, with nothing in the
+        scene saying where the file was. The file is the release's `cap_aorta.flow`."""
+        import tempfile
+        import zipfile
+
+        data = self.aorta()
+        if data is None:
+            return
+        path = str(data.cap_aorta_path)
+        expected = np.loadtxt(path)
+        self.assertEqual(slicer.app.coreIOManager().fileType(path), FLOW_FILE_TYPE)
+        node = slicer.util.loadNodeFromFile(path)
+        self.assertTrue(node.IsA("vtkMRMLTableNode"))
+        self.assertEqual(node.GetName(), "cap_aorta")
+        self.assertEqual((node.GetNumberOfRows(), node.GetNumberOfColumns()), (len(expected), 2))
+        self.assertEqual((node.GetColumnName(0), node.GetColumnName(1)), (FLOW_TIME_COLUMN, FLOW_VALUE_COLUMN))
+        self.assertEqual((node.GetColumnUnitLabel(FLOW_TIME_COLUMN), node.GetColumnUnitLabel(FLOW_VALUE_COLUMN)),
+                         ("s", "mL/s"))
+        np.testing.assert_array_equal(slicer.util.arrayFromTableColumn(node, FLOW_TIME_COLUMN), expected[:, 0])
+        np.testing.assert_array_equal(slicer.util.arrayFromTableColumn(node, FLOW_VALUE_COLUMN), expected[:, 1])
+        self.assertEqual(node.GetAttribute(FLOW_FILE_ATTRIBUTE), "1", "marked, and not with the path")
+
+        bundle = os.path.join(tempfile.mkdtemp(), "flow.mrb")
+        self.assertTrue(slicer.util.saveScene(bundle))
+        with zipfile.ZipFile(bundle) as archive:
+            scene = "".join(archive.read(name).decode(errors="replace") for name in archive.namelist()
+                            if name.endswith(".mrml"))
+        self.assertNotIn(os.path.dirname(path), scene, "where the file was is not in the scene")
+        slicer.mrmlScene.Clear()
+        slicer.util.loadScene(bundle)
+        loaded = [table for table in slicer.util.getNodesByClass("vtkMRMLTableNode")
+                  if table.GetAttribute(FLOW_FILE_ATTRIBUTE)]
+        self.assertEqual(len(loaded), 1)
+        # Not the same numbers: vtkMRMLTableStorageNode writes six significant figures, and has no
+        # setting for more. An inflow keeps its own copy, on the mesh, at full precision.
+        np.testing.assert_allclose(slicer.util.arrayFromTableColumn(loaded[0], FLOW_VALUE_COLUMN), expected[:, 1],
+                                   rtol=1e-5, err_msg="out of a .mrb and back, to six figures")
+        self.delayDisplay("A .flow file loads as a table")
 
     @staticmethod
     def clickBlock(view, key):
@@ -1205,14 +1315,34 @@ class SimVascularROMTest(ScriptedLoadableModuleTest):
                 kind, qt.QPointF(point), qt.QPointF(onScreen), qt.Qt.LeftButton, buttons, qt.Qt.NoModifier))
             slicer.app.processEvents()
 
-    def namedY(self, name="Y"):
-        from svromsetup import testing
+    # The testing aorta, once fetched: kept on the class, so that a session downloads it once.
+    _aorta = None
 
+    def aorta(self):
+        """svReducedOrderModelingUtils' testing aorta, fetched once into Slicer's cache -- or from the
+        folder SVROM_TESTING_DATA names -- and read; None where it cannot be had, the test that
+        wanted it said to be skipped, so that the rest still run."""
+        from svromsetup import testing_data
+
+        if SimVascularROMTest._aorta is None:
+            try:
+                SimVascularROMTest._aorta = testing_data.case01(
+                    os.path.join(slicer.app.cachePath, "SimVascularROM", "TESTING_DATA"))
+            except testing_data.TestingDataUnavailable as error:
+                self.delayDisplay(f"Skipped: {error}")
+                return None
+        return SimVascularROMTest._aorta
+
+    def namedAorta(self, data, name="case01", named=True):
+        """The aorta's surface as a model, its faces named as Mesh Prep names them -- or, not
+        `named`, as it comes: face ids, and no names. A labelled surface, which is all a 0D model
+        needs of the geometry, rather than the release's volume mesh, whose faces are not labelled."""
         node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", name)
-        node.SetAndObserveMesh(testing.y_surface())
+        node.SetAndObserveMesh(data.surface())
         node.CreateDefaultDisplayNodes()
-        node.SetAttribute(FACE_NAMES_ATTRIBUTE, json.dumps(
-            {str(faceId): faceName for faceId, faceName in testing.NAMES.items()}))
+        if named:
+            node.SetAttribute(FACE_NAMES_ATTRIBUTE, json.dumps(
+                {str(faceId): faceName for faceId, faceName in data.names.items()}))
         return node
 
     def widget(self):
@@ -1221,158 +1351,281 @@ class SimVascularROMTest(ScriptedLoadableModuleTest):
         widget.ui.caseDirectoryPathLineEdit.currentPath = ""
         return widget
 
+    @staticmethod
+    def typeValues(conditions, faceId, values):
+        """Values typed into a cap's boxes, one to a box in order, each left as a person leaves it."""
+        for box, value in zip(conditions.valueBoxes(faceId), values):
+            box.text = value
+            box.editingFinished()
+
     def typeCondition(self, widget, faceId, kind, text):
+        """A kind chosen for a cap, and `text`'s comma-separated values typed in its boxes."""
         row = widget.conditionsTable.rowOf(faceId)
         widget.ui.facesTable.cellWidget(row, TYPE_COLUMN).currentIndex = KIND_CHOICES.index(kind)
-        widget.ui.facesTable.item(row, VALUES_COLUMN).setText(text)
+        self.typeValues(widget.conditionsTable, faceId, [value.strip() for value in text.split(",")] if text else [])
 
     def test_conditionsAreKeptOnTheMeshTheyAreFor(self):
-        """Two anatomies with the same face ids keep their own conditions, and get them back."""
-        from svromsetup import testing
+        """Two anatomies with the same face ids -- a pre-op and a post-op of one aorta -- keep their
+        own conditions, and get them back."""
+        from svromsetup import testing_data
 
+        data = self.aorta()
+        if data is None:
+            return
+        valve, carotid, aorta = (data.face_id(name) for name in (
+            testing_data.INLET, "cap_left_common_carotid", testing_data.RCR_OUTLET))
         widget = self.widget()
-        first, second = self.namedY("first"), self.namedY("second")
+        first, second = self.namedAorta(data, "pre-op"), self.namedAorta(data, "post-op")
         widget.ui.inputMeshSelector.setCurrentNode(first)
-        self.assertEqual([faceId for faceId, _name, _geometry in widget.conditionsTable.caps],
-                         [testing.INLET_ID, testing.RIGHT_ID, testing.LEFT_ID])
-        self.assertEqual(widget._inletFaceId, testing.INLET_ID, "the largest cap is the inlet")
-        self.typeCondition(widget, testing.RIGHT_ID, bcs.RESISTANCE_KIND, "1500")
-        self.assertEqual(widget.conditionsTable.conditions[testing.RIGHT_ID], bcs.Resistance(1500.0))
+        self.assertEqual(sorted(faceId for faceId, _name, _geometry in widget.conditionsTable.caps),
+                         sorted(faceId for faceId, name in data.names.items() if name.startswith("cap_")))
+        self.assertEqual(widget._inletFaceId, valve, "the largest cap, the valve, is the inlet")
+        self.typeCondition(widget, carotid, bcs.RESISTANCE_KIND, "16000")
+        self.assertEqual(widget.conditionsTable.conditions[carotid], bcs.Resistance(16000.0))
 
         widget.ui.inputMeshSelector.setCurrentNode(second)
         self.assertEqual(widget.conditionsTable.conditions, {}, "a condition set on one anatomy is not on another")
         widget.ui.inputMeshSelector.setCurrentNode(first)
-        self.assertEqual(widget.conditionsTable.conditions, {testing.RIGHT_ID: bcs.Resistance(1500.0)})
+        self.assertEqual(widget.conditionsTable.conditions, {carotid: bcs.Resistance(16000.0)})
         self.assertEqual(bcs.from_json(first.GetAttribute(BOUNDARY_CONDITIONS_ATTRIBUTE)),
-                         {testing.RIGHT_ID: bcs.Resistance(1500.0)})
+                         {carotid: bcs.Resistance(16000.0)})
 
-        # What cannot be read stays on screen, in red, and is not a condition.
-        self.typeCondition(widget, testing.LEFT_ID, bcs.RCR_KIND, "1, 2")
-        self.assertNotIn(testing.LEFT_ID, widget.conditionsTable.conditions)
-        item = widget.ui.facesTable.item(widget.conditionsTable.rowOf(testing.LEFT_ID), VALUES_COLUMN)
-        self.assertEqual(item.text(), "1, 2")
-        self.assertEqual(item.foreground().color().red(), INVALID_VALUES_COLOR.red())
+        # A value that cannot be read stays in its box, in red, and the condition is not one; the
+        # others are left as they were typed.
+        self.typeCondition(widget, aorta, bcs.RCR_KIND, "180, 8e-4x, 1620")
+        self.assertNotIn(aorta, widget.conditionsTable.conditions)
+        boxes = widget.conditionsTable.valueBoxes(aorta)
+        self.assertEqual([box.text for box in boxes], ["180", "8e-4x", "1620", ""])
+        self.assertIn(INVALID_VALUES_COLOR.name(), boxes[1].styleSheet, "C, and C alone, is wrong")
+        self.assertEqual(boxes[0].styleSheet, "")
+        self.assertIn("could not read '8e-4x'", boxes[1].toolTip)
         self.assertFalse(widget.ui.runButton.enabled)
+        self.typeValues(widget.conditionsTable, aorta, ["180", "0.0008"])
+        self.assertEqual(widget.conditionsTable.conditions[aorta], data.conditions[testing_data.RCR_OUTLET],
+                         "Pd left empty is 0, and the RCR is rcrt.dat's")
+        self.assertEqual(boxes[3].placeholderText, "0")
         self.delayDisplay("Conditions kept per mesh")
 
-    def test_doubleClickingAnInflowLoadsItsWaveform(self):
-        """On an inflow the values are a file to load; on anything else, values to type.
+    def test_anInflowIsReadFromTheFlowTableChosen(self):
+        """An inflow's waveform is a flow table, chosen in its row: read in, turned round by its
+        Invert box, following the table as it is edited, kept with the scene, and kept when the table
+        is deleted; a steady flow typed or another kind chosen leaves the table behind.
 
-        The file dialog is answered by replacing the method that opens it, which is the one thing
-        here that would wait for a person.
+        On the release's own inflow for the aorta's valve, through the reader as a user drops it, and
+        its `cap_aorta.flow` as the second. Chosen with setCurrentNode, which activates the node as a
+        click on it does.
         """
         import tempfile
 
-        from svromsetup import testing
+        from svromsetup import testing_data
 
+        data = self.aorta()
+        if data is None:
+            return
+        valve, carotid, aorta, subclavian = (data.face_id(name) for name in (
+            testing_data.INLET, "cap_left_common_carotid", testing_data.RCR_OUTLET, "cap_left_subclavian"))
         widget = self.widget()
-        widget.ui.inputMeshSelector.setCurrentNode(self.namedY())
-        table = widget.ui.facesTable
-        # Written as svMultiPhysics writes an inflow, negative, so that turning it round is
-        # checked too.
-        path = os.path.join(tempfile.mkdtemp(), "inlet.flow")
-        with open(path, "w") as handle:
-            handle.write("0.0 -5.0\n0.4 -15.0\n0.8 -5.0\n")
-        asked, shown = [], []
-        conditions = widget.conditionsTable
-        conditions.chooseWaveformFile = lambda faceId: asked.append(faceId) or path
-        # Answered as the user answers the pop-up that plots it: negate it.
-        conditions.reviewWaveform = lambda waveform, faceId: shown.append(waveform) or True
-        inlet = lambda: conditions.onCellDoubleClicked(conditions.rowOf(testing.INLET_ID), VALUES_COLUMN)
-        try:
-            self.typeCondition(widget, testing.INLET_ID, bcs.INFLOW, "")
-            inlet()
-            self.assertEqual(asked, [testing.INLET_ID])
-            self.assertEqual(shown[0].flow, (-5.0, -15.0, -5.0), "shown as the file has it")
-            self.assertEqual(conditions.conditions[testing.INLET_ID],
-                             bcs.Inflow((0.0, 0.4, 0.8), (5.0, 15.0, 5.0)), "negated, as asked")
-            self.assertIn("Negated", widget.ui.statusLabel.text)
-            # Not negated, it is taken as the file has it, and its negative mean is said.
-            conditions.reviewWaveform = lambda waveform, faceId: False
-            inlet()
-            self.assertEqual(conditions.conditions[testing.INLET_ID].flow, (-5.0, -15.0, -5.0))
-            self.assertIn("mean is negative", widget.ui.statusLabel.text)
-            # Cancelled, the cap keeps what it had.
-            conditions.reviewWaveform = lambda waveform, faceId: None
-            conditions.conditions[testing.INLET_ID] = bcs.Inflow.steady(3.0)
-            inlet()
-            self.assertEqual(conditions.conditions[testing.INLET_ID], bcs.Inflow.steady(3.0))
-            conditions.reviewWaveform = lambda waveform, faceId: True
-            inlet()
-            asked[:] = [testing.INLET_ID]
-            self.assertEqual(table.item(widget.conditionsTable.rowOf(testing.INLET_ID), VALUES_COLUMN).text(),
-                             os.path.realpath(path), "the cell names the file the waveform came from")
+        mesh = self.namedAorta(data)
+        widget.ui.inputMeshSelector.setCurrentNode(mesh)
+        table, conditions = widget.ui.facesTable, widget.conditionsTable
+        # The file's numbers as numpy reads them, every one of its 256 rows, the first at time 0.
+        times, flows = (tuple(column) for column in np.loadtxt(data.inflow_path).T)
+        inverted = tuple(-flow for flow in flows)
+        flowTable = slicer.util.loadNodeFromFile(str(data.inflow_path))
+        other = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLTableNode", "not a waveform")
+        row = conditions.rowOf(valve)
+        self.assertIsNone(table.cellWidget(row, TABLE_COLUMN), "no selector before the cap is an inflow")
+        self.typeCondition(widget, valve, bcs.INFLOW, "")
+        selector = table.cellWidget(row, TABLE_COLUMN)
+        self.assertEqual([selector.nodeFromIndex(i) for i in range(selector.nodeCount())], [flowTable],
+                         "the .flow reader's tables offered, and no other")
+        self.assertNotEqual(other.GetID(), flowTable.GetID())
 
-            # Anywhere else a double-click opens the values for typing and asks for no file.
-            self.typeCondition(widget, testing.RIGHT_ID, bcs.RCR_KIND, "100, 1e-4, 1000")
-            widget.conditionsTable.onCellDoubleClicked(widget.conditionsTable.rowOf(testing.RIGHT_ID), VALUES_COLUMN)
-            self.assertEqual(asked, [testing.INLET_ID])
-            self.assertEqual(table.state(), qt.QAbstractItemView.EditingState)
-            # Closed with Escape, as a person would close it. Not with reset(), which closes
-            # editors by deleting every widget in the view's cells -- the condition combo boxes
-            # with them.
-            for editor in table.viewport().findChildren("QLineEdit"):
-                qt.QApplication.sendEvent(editor, qt.QKeyEvent(qt.QEvent.KeyPress, qt.Qt.Key_Escape,
-                                                               qt.Qt.NoModifier))
-            self.assertNotEqual(table.state(), qt.QAbstractItemView.EditingState)
-            self.assertIsNotNone(table.cellWidget(widget.conditionsTable.rowOf(testing.RIGHT_ID), TYPE_COLUMN))
-            # And a cap with no kind yet is left alone.
-            widget.conditionsTable.onCellDoubleClicked(widget.conditionsTable.rowOf(testing.LEFT_ID), VALUES_COLUMN)
-            self.assertEqual(asked, [testing.INLET_ID])
-        finally:
-            del widget.conditionsTable.chooseWaveformFile
-            del widget.conditionsTable.reviewWaveform
-        self.delayDisplay("Double-clicking an inflow loads its waveform")
+        selector.setCurrentNode(flowTable)
+        waveform = conditions.conditions[valve]
+        self.assertEqual((waveform.time, waveform.flow), (times, flows), "read as the file has it")
+        self.assertFalse(waveform.negated)
+        self.assertIs(mesh.GetNodeReference(f"{INFLOW_TABLE_ROLE}{valve}"), flowTable)
+        self.assertIn("256 points", widget.ui.statusLabel.text)
+        self.assertNotIn("mean is negative", widget.ui.statusLabel.text, "positive, into the model")
+        flowBox = conditions.valueBoxes(valve)[0]
+        self.assertEqual(flowBox.text, "", "a waveform is not a value to type")
+        self.assertEqual(flowBox.placeholderText, "waveform", "it is named there")
+        # Contained, not first: Slicer rewrites a tooltip as rich text, in a paragraph of its own.
+        self.assertIn("waveform, 256 points", flowBox.toolTip, "and described")
+        self.assertEqual(conditions.selectedFaceIds(), [valve], "selected, to be drawn")
+        plot = conditions.plot
+        self.assertFalse(plot.widget.isHidden())
+        self.assertEqual(tuple(plot.curve.GetValue(i, 1).ToDouble() for i in range(plot.curve.GetNumberOfRows())),
+                         flows, "every point, as the file has it")
+        self.assertIn("Into the model is positive", plot.summaryLabel.text)
+        self.assertEqual(plot.summaryLabel.styleSheet, "", "nothing to warn of")
 
-    def test_aWaveformIsPlottedAndNegatedOnlyIfAsked(self):
-        """The pop-up a waveform file opens: every point plotted as the file has it, Negate flow
-        unticked, and ticked, the curve and its summary turned round."""
-        from SimVascularROMLib.BoundaryConditionsTable import WaveformReview
+        # Its Invert box: unticked as chosen; ticked, the flows turned round, drawn so, said to take
+        # flow out, and kept on the mesh.
+        invert = table.item(row, INVERT_COLUMN)
+        self.assertTrue(invert.flags() & qt.Qt.ItemIsUserCheckable)
+        self.assertEqual(invert.checkState(), qt.Qt.Unchecked)
+        self.assertTrue(invert.icon().isNull(), "no warning beside the box")
+        invert.setCheckState(qt.Qt.Checked)
+        self.assertEqual(conditions.conditions[valve].flow, inverted)
+        self.assertIn("Inverted", widget.ui.statusLabel.text)
+        self.assertIn("mean is negative", widget.ui.statusLabel.text)
+        self.assertEqual(plot.curve.GetValue(1, 1).ToDouble(), inverted[1], "the plot follows the box")
+        self.assertNotEqual(plot.summaryLabel.styleSheet, "", "and warns")
+        # Beside the box too, where it shows without the cap being selected.
+        self.assertFalse(table.item(row, INVERT_COLUMN).icon().isNull(), "a warning beside the box")
+        self.assertIn("mean is negative", table.item(row, INVERT_COLUMN).toolTip())
+        table.selectRow(conditions.rowOf(carotid))
+        self.assertFalse(table.item(row, INVERT_COLUMN).icon().isNull(), "selected or not")
+        table.selectRow(row)
+        saved = bcs.from_json(mesh.GetAttribute(BOUNDARY_CONDITIONS_ATTRIBUTE))[valve]
+        self.assertTrue(saved.negated and saved.flow == inverted)
 
-        waveform = bcs.Inflow((0.0, 0.4, 0.8), (-5.0, -15.0, -5.0), "/somewhere/inlet.flow")
-        review = WaveformReview(waveform, "cap_inlet")
-        try:
-            review.dialog.show()
-            self.assertFalse(review.negateCheckBox.checked, "not negated until asked")
-            self.assertEqual(review.given(), waveform)
-            curve = review._curve
-            self.assertEqual([curve.GetValue(row, 1).ToDouble() for row in range(curve.GetNumberOfRows())],
-                             [-5.0, -15.0, -5.0], "every point, as the file has it")
-            self.assertIn("mean is negative", review.summaryLabel.text)
-            review.negateCheckBox.checked = True
-            self.assertEqual(review.given().flow, (5.0, 15.0, 5.0))
-            self.assertEqual(curve.GetValue(1, 1).ToDouble(), 15.0, "the plot follows the box")
-            self.assertNotIn("negative", review.summaryLabel.text)
-            box = review.dialog.findChildren(qt.QDialogButtonBox)[0]
-            for which in (qt.QDialogButtonBox.Ok, qt.QDialogButtonBox.Cancel):
-                button = box.button(which)
-                self.assertIsNotNone(button, "OK and Cancel are there")
-                bottom = button.mapTo(review.dialog, qt.QPoint(0, button.height)).y()
-                self.assertTrue(button.height > 0 and bottom <= review.dialog.height, "and on screen")
-            box.button(qt.QDialogButtonBox.Ok).click()
-            self.assertEqual(review.dialog.result(), qt.QDialog.Accepted)
-        finally:
-            review.dialog.reject()
-        self.delayDisplay("A waveform is plotted, and negated only if asked")
+        # Edited, the table is read again, still inverted -- into the conditions as the mesh has them,
+        # so that a change the other panel made since, unseen here, is not undone.
+        changedElsewhere = dict(bcs.from_json(mesh.GetAttribute(BOUNDARY_CONDITIONS_ATTRIBUTE)))
+        changedElsewhere[carotid] = bcs.Resistance(1234.0)
+        mesh.SetAttribute(BOUNDARY_CONDITIONS_ATTRIBUTE, bcs.to_json(changedElsewhere))
+        flowTable.GetTable().GetColumn(1).SetValue(1, 100.0)
+        flowTable.GetTable().Modified()
+        edited = (inverted[0], -100.0) + inverted[2:]
+        self.assertEqual(conditions.conditions[valve].flow, edited)
+        self.assertEqual(plot.curve.GetValue(1, 1).ToDouble(), -100.0)
+        saved = bcs.from_json(mesh.GetAttribute(BOUNDARY_CONDITIONS_ATTRIBUTE))
+        self.assertEqual(saved[valve].flow, edited)
+        self.assertEqual(saved[carotid], bcs.Resistance(1234.0), "the other panel's change kept")
+        # Renamed, the same numbers: read, and nothing said of it.
+        widget.ui.statusLabel.text = "as it was"
+        flowTable.SetName("renamed")
+        self.assertEqual(widget.ui.statusLabel.text, "as it was")
+
+        # Saved and opened again: the table still the cap's, its numbers as they were read rather
+        # than the six figures the table comes back with -- 82.0354 for the file's 82.03541779.
+        bundle = os.path.join(tempfile.mkdtemp(), "inflow.mrb")
+        self.assertTrue(slicer.util.saveScene(bundle))
+        import zipfile
+        with zipfile.ZipFile(bundle) as archive:
+            scene = "".join(archive.read(name).decode(errors="replace") for name in archive.namelist()
+                            if name.endswith(".mrml"))
+        self.assertNotIn(str(data.folder), scene, "where the inflow's file was is not in the scene")
+        slicer.mrmlScene.Clear()
+        slicer.util.loadScene(bundle)
+        mesh = slicer.util.getNode("case01")
+        widget.ui.inputMeshSelector.setCurrentNode(mesh)
+        flowTable = mesh.GetNodeReference(f"{INFLOW_TABLE_ROLE}{valve}")
+        self.assertIsNotNone(flowTable, "the choice kept with the scene")
+        self.assertIs(table.cellWidget(row, TABLE_COLUMN).currentNode(), flowTable)
+        self.assertNotEqual(slicer.util.arrayFromTableColumn(flowTable, FLOW_VALUE_COLUMN)[0], flows[0])
+        self.assertEqual(conditions.conditions[valve].flow, edited)
+        self.assertEqual(table.item(row, INVERT_COLUMN).checkState(), qt.Qt.Checked)
+        self.assertFalse(table.item(row, INVERT_COLUMN).icon().isNull(), "still warned of, opened again")
+
+        # Deleted, the table is gone from the selector, and the waveform read from it is kept.
+        # Another table in the scene, for the selector to move on to by itself: the release's
+        # cap_aorta.flow.
+        secondPath = str(data.cap_aorta_path)
+        secondTimes, secondFlows = (tuple(column) for column in np.loadtxt(secondPath).T)
+        second = slicer.util.loadNodeFromFile(secondPath)
+        slicer.mrmlScene.RemoveNode(flowTable)
+        slicer.app.processEvents()
+        selector = table.cellWidget(row, TABLE_COLUMN)
+        self.assertIsNone(selector.currentNode(), "not moved on to the scene's other table")
+        self.assertEqual(conditions.conditions[valve].flow, edited)
+        self.assertIn("deleted", widget.ui.statusLabel.text)
+        self.assertTrue(table.item(row, INVERT_COLUMN).flags() & qt.Qt.ItemIsUserCheckable,
+                        "a kept waveform is still one to turn round")
+
+        # Another chosen: read in unticked, whatever the box said for the last, and the warning gone
+        # with the flow that was backwards.
+        selector.setCurrentNode(second)
+        self.assertEqual(conditions.conditions[valve].flow, secondFlows)
+        self.assertEqual(table.item(row, INVERT_COLUMN).checkState(), qt.Qt.Unchecked)
+        self.assertTrue(table.item(row, INVERT_COLUMN).icon().isNull())
+        # Q left as it was, empty, leaves the waveform; a steady flow typed over it is the cap's,
+        # not the table's, spread over the cycle the waveform had.
+        self.typeValues(conditions, valve, [""])
+        self.assertEqual(conditions.conditions[valve].flow, secondFlows)
+        self.typeValues(conditions, valve, ["3"])
+        self.assertEqual(conditions.conditions[valve], bcs.Inflow.steady(3.0, secondTimes[-1]))
+        self.assertIsNone(mesh.GetNodeReference(f"{INFLOW_TABLE_ROLE}{valve}"))
+        self.assertIsNone(table.cellWidget(row, TABLE_COLUMN).currentNode())
+        self.assertFalse(table.item(row, INVERT_COLUMN).flags() & qt.Qt.ItemIsUserCheckable,
+                         "a typed flow is typed with its sign")
+        # None chosen: no waveform, the cap left to be given one. Activated as a click on None
+        # activates it, which setCurrentNode(None) does not.
+        selector = table.cellWidget(row, TABLE_COLUMN)
+        selector.setCurrentNode(second)
+        selector.setCurrentNode(None)
+        selector.nodeActivated(None)
+        self.assertNotIn(valve, conditions.conditions)
+        self.assertEqual(conditions.kindOf(valve), bcs.INFLOW)
+        self.assertIsNone(mesh.GetNodeReference(f"{INFLOW_TABLE_ROLE}{valve}"))
+        self.assertTrue(plot.widget.isHidden())
+        # Another kind: no selector, and no table.
+        table.cellWidget(row, TABLE_COLUMN).setCurrentNode(second)
+        self.typeCondition(widget, valve, bcs.RESISTANCE_KIND, "100")
+        self.assertIsNone(table.cellWidget(row, TABLE_COLUMN))
+        self.assertIsNone(mesh.GetNodeReference(f"{INFLOW_TABLE_ROLE}{valve}"))
+        self.assertFalse(table.item(row, INVERT_COLUMN).flags() & qt.Qt.ItemIsUserCheckable)
+        second.GetTable().GetColumn(1).SetValue(1, 99.0)
+        second.GetTable().Modified()
+        self.assertEqual(conditions.conditions[valve], bcs.Resistance(100.0), "not followed")
+
+        # Each value has a box, labelled with its name; a cap with no kind has none, and no cell is
+        # opened for typing over them.
+        self.typeCondition(widget, aorta, bcs.RCR_KIND, "")
+        editor = table.cellWidget(conditions.rowOf(aorta), VALUES_COLUMN)
+        self.assertEqual([label.text for label in editor.findChildren("QLabel")], ["Rp", "C", "Rd", "Pd"])
+        self.assertEqual(len(conditions.valueBoxes(aorta)), 4)
+        self.assertEqual(conditions.valueBoxes(subclavian), [])
+        self.assertEqual(int(table.editTriggers), int(qt.QAbstractItemView.NoEditTriggers))
+        # A click in a box selects its cap, for the hint and the highlight to be its.
+        table.selectRow(row)
+        conditions.valueBoxes(aorta)[2].setCursorPosition(0)
+        conditions.valueBoxes(aorta)[2].text = "1620"
+        self.assertEqual(conditions.selectedFaceIds(), [aorta])
+        self.assertIn("RCR", widget.ui.valuesHintLabel.text)
+        self.delayDisplay("An inflow is read from the flow table chosen")
+
+    def test_theWaveformIsDrawnUnderTheTableInBothPanels(self):
+        """The plot is the table's, put after the hint in the layout that holds it, so that both
+        panels have it without either's UI file knowing of it; and no window is opened for it."""
+        for module in ("SimVascularROM", "SimVascularMultiPhysics"):
+            widget = slicer.util.getModuleWidget(module)
+            hint, plot = widget.ui.valuesHintLabel, widget.conditionsTable.plot.widget
+            layout = hint.parentWidget().layout()
+            self.assertEqual(layout.indexOf(plot), layout.indexOf(hint) + 1, f"{module}: right under the hint")
+            self.assertEqual(widget.ui.facesTable.columnCount, len(COLUMNS))
+            self.assertEqual(widget.ui.facesTable.horizontalHeaderItem(INVERT_COLUMN).text(), "Invert")
+            self.assertEqual(widget.ui.facesTable.horizontalHeaderItem(TABLE_COLUMN).text(), "Flow table")
+        self.delayDisplay("The waveform is drawn under the table, in both panels")
 
     def test_aMeshWithoutNamesIsSentToMeshPrep(self):
-        from svmeshcomplete import testing
-
+        """The aorta as it comes, its faces labelled and not named: nothing to set conditions on,
+        and the way to Mesh Prep shown."""
+        data = self.aorta()
+        if data is None:
+            return
         widget = self.widget()
-        node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", "unnamed")
-        node.SetAndObserveMesh(testing.cube_mesh())
-        widget.ui.inputMeshSelector.setCurrentNode(node)
+        widget.ui.inputMeshSelector.setCurrentNode(self.namedAorta(data, "unnamed", named=False))
         self.assertEqual(widget.conditionsTable.caps, [])
         self.assertFalse(widget.ui.openMeshPrepButton.isHidden())
         self.assertIn("Mesh Prep", widget.ui.meshStatusLabel.text)
         self.delayDisplay("An unnamed mesh is sent to Mesh Prep")
 
-    def test_aWholeCaseOnAY(self):
-        """Through the package and the solver, where both are on this machine."""
+    def test_aWholeCaseOnTheTestingAorta(self):
+        """The release's aorta through the panel, the package and the solver, where both are on this
+        machine: its conditions given as a user gives them -- the inflow file dropped on Slicer and
+        chosen, the .dat files' values typed in their boxes -- and every outlet draining as its file
+        says."""
         import tempfile
 
-        from svromsetup import testing
+        from svromsetup import testing_data
 
+        data = self.aorta()
+        if data is None:
+            return
         widget = self.widget()
         try:
             # A --testing run installs nothing, so this runs where svromutils and svzerod are
@@ -1382,27 +1635,50 @@ class SimVascularROMTest(ScriptedLoadableModuleTest):
         except RuntimeError as error:
             self.delayDisplay(f"Skipped: {error}")
             return
-        node = self.namedY()
+        carotid, subclavian = "cap_left_common_carotid", "cap_right_subclavian"
+        node = self.namedAorta(data)
         widget.ui.inputMeshSelector.setCurrentNode(node)
         widget.ui.caseDirectoryPathLineEdit.currentPath = tempfile.mkdtemp()
-        self.typeCondition(widget, testing.INLET_ID, bcs.INFLOW, "10")
-        self.typeCondition(widget, testing.RIGHT_ID, bcs.RESISTANCE_KIND, "2000")
-        self.typeCondition(widget, testing.LEFT_ID, bcs.INFLOW, "3")
+        valve = data.face_id(testing_data.INLET)
+        self.typeCondition(widget, valve, bcs.INFLOW, "")
+        widget.ui.facesTable.cellWidget(widget.conditionsTable.rowOf(valve), TABLE_COLUMN).setCurrentNode(
+            slicer.util.loadNodeFromFile(str(data.inflow_path)))
+        for name, condition in data.conditions.items():
+            if isinstance(condition, bcs.RCR):
+                self.typeCondition(widget, data.face_id(name), bcs.RCR_KIND, ", ".join(
+                    repr(value) for value in (condition.Rp, condition.C, condition.Rd, condition.Pd)))
+            elif isinstance(condition, bcs.Resistance):
+                self.typeCondition(widget, data.face_id(name), bcs.RESISTANCE_KIND, repr(condition.R))
+        self.assertEqual(widget.conditionsTable.conditionsByName(), data.conditions, "as the files have them")
         self.assertTrue(widget.ui.runButton.enabled)
-        widget.ui.cyclesSpinBox.value = 3
-        widget.ui.pointsSpinBox.value = 20
+        # Enough cycles for the RCR's compliance to settle -- Rd times C is 1.3 s, a cycle 0.91 s.
+        widget.ui.cyclesSpinBox.value = 10
+        widget.ui.pointsSpinBox.value = 256
         widget.runSimulation()
 
+        # Over the last cycle: the valve's mean flow the file's; each resistance's flow its pressure
+        # over its R; the RCR's its pressure less Pd over Rp plus Rd; what goes in comes out.
         faces = {face.name: face for face in widget._faceResults}
-        self.assertAlmostEqual(faces["cap_right"].mean_flow, 13.0, places=4)
+        self.assertEqual(sorted(faces), sorted(data.conditions))
+        inflow = faces[testing_data.INLET].mean_flow
+        self.assertAlmostEqual(inflow / data.conditions[testing_data.INLET].mean, 1.0, places=6)
+        for name, condition in data.conditions.items():
+            pressure = faces[name].mean_pressure_mmhg * 1333.22
+            if isinstance(condition, bcs.Resistance):
+                self.assertAlmostEqual(faces[name].mean_flow / (pressure / condition.R), 1.0, places=4, msg=name)
+            elif isinstance(condition, bcs.RCR):
+                self.assertAlmostEqual(faces[name].mean_flow / ((pressure - condition.Pd) / (condition.Rp + condition.Rd)),
+                                       1.0, places=3, msg=name)
+        outflow = sum(face.mean_flow for name, face in faces.items() if name != testing_data.INLET)
+        self.assertAlmostEqual(outflow / inflow, 1.0, places=5)
         self.assertIsNotNone(node.GetNodeReference(RESULTS_MODEL_REFERENCE))
         table = node.GetNodeReference(RESULTS_TABLE_REFERENCE).GetTable()
-        self.assertIsNotNone(table.GetColumnByName("cap_right pressure [mmHg]"))
+        self.assertIsNotNone(table.GetColumnByName(f"{carotid} pressure [mmHg]"))
 
         # Selecting a cap in the conditions table plots it, and the export holds every cap.
-        widget.ui.facesTable.selectRow(widget.conditionsTable.rowOf(testing.RIGHT_ID))
+        widget.ui.facesTable.selectRow(widget.conditionsTable.rowOf(data.face_id(carotid)))
         chart = node.GetNodeReference(RESULTS_CHART_REFERENCE)
-        self.assertEqual(chart.GetNthPlotSeriesNode(0).GetYColumnName(), "cap_right pressure [mmHg]")
+        self.assertEqual(chart.GetNthPlotSeriesNode(0).GetYColumnName(), f"{carotid} pressure [mmHg]")
         self.assertTrue(widget.ui.exportButton.enabled)
         directory = widget.ui.caseDirectoryPathLineEdit.currentPath
         self.assertTrue(os.path.isfile(os.path.join(directory, case.RESULTS_NAME)))
@@ -1411,7 +1687,8 @@ class SimVascularROMTest(ScriptedLoadableModuleTest):
         with open(exported) as handle:
             header = handle.readline().strip().split(",")
         self.assertEqual(header[0], "time [s]")
-        self.assertIn("cap_left flow [mL/s]", header)
+        for name in data.conditions:
+            self.assertIn(f"{name} flow [mL/s]", header)
 
         # The network: every block drawn; a cap's block selects the cap's row, which is what
         # plots it and shows it on the anatomy; a vessel's plots its two ends and picks it out on
@@ -1419,11 +1696,11 @@ class SimVascularROMTest(ScriptedLoadableModuleTest):
         widget.onShowNetwork()
         view = widget.networkView
         self.assertEqual(set(view.items), set(widget._network.nodes))
-        right = widget._network.node_for_cap("cap_right")
-        self.clickBlock(view, right.key)
-        self.assertEqual(widget.conditionsTable.selectedFaceIds(), [testing.RIGHT_ID])
-        self.assertIn("cap_right: Resistance", view.infoLabel.text)
-        (vessel,) = widget._network.parents(right.key)
+        block = widget._network.node_for_cap(carotid)
+        self.clickBlock(view, block.key)
+        self.assertEqual(widget.conditionsTable.selectedFaceIds(), [data.face_id(carotid)])
+        self.assertIn(f"{carotid}: Resistance", view.infoLabel.text)
+        (vessel,) = widget._network.parents(block.key)
         self.clickBlock(view, vessel)
         self.assertEqual(widget.conditionsTable.selectedFaceIds(), [])
         vesselName = widget._network.nodes[vessel].vessel
@@ -1431,30 +1708,30 @@ class SimVascularROMTest(ScriptedLoadableModuleTest):
         sleeve = widget.logic.selectedVesselNode()
         self.assertIsNotNone(sleeve)
         self.assertGreater(sleeve.GetMesh().GetNumberOfPoints(), 0)
-        widget.ui.facesTable.selectRow(widget.conditionsTable.rowOf(testing.LEFT_ID))
-        self.assertEqual(view.selectedKey(), widget._network.node_for_cap("cap_left").key)
+        widget.ui.facesTable.selectRow(widget.conditionsTable.rowOf(data.face_id(testing_data.RCR_OUTLET)))
+        self.assertEqual(view.selectedKey(), widget._network.node_for_cap(testing_data.RCR_OUTLET).key)
         self.assertIsNone(widget.logic.selectedVesselNode(), "a cap selected clears the vessel")
 
         # Created solver files are run as they are: a resistance doubled by hand in
         # solver_0d.json between creating and running is the one solved. Changing a condition in
         # the panel afterwards makes Run write them again, from the panel.
-        def pressureAtRight():
-            return {face.name: face for face in widget._faceResults}["cap_right"].mean_pressure_mmhg
-        before = pressureAtRight()
+        def drainsThrough(name, resistance):
+            face = {face.name: face for face in widget._faceResults}[name]
+            return face.mean_flow / (face.mean_pressure_mmhg * 1333.22 / resistance)
         self.assertTrue(widget.ui.createSolverFilesButton.enabled)
         widget.createSolverFiles()
         config = os.path.join(widget.ui.caseDirectoryPathLineEdit.currentPath, case.SOLVER_INPUT_NAME)
         with open(config) as handle:
             edited = json.load(handle)
         for condition in edited["boundary_conditions"]:
-            if condition["bc_name"] == "RESISTANCE_cap_right":
+            if condition["bc_name"] == f"RESISTANCE_{carotid}":
                 condition["bc_values"]["R"] *= 2
         with open(config, "w") as handle:
             json.dump(edited, handle)
         widget.runSimulation()
-        self.assertAlmostEqual(pressureAtRight(), 2 * before, places=2)
-        self.typeCondition(widget, testing.RIGHT_ID, bcs.RESISTANCE_KIND, "2000")
-        self.typeCondition(widget, testing.LEFT_ID, bcs.INFLOW, "3.5")
+        self.assertAlmostEqual(drainsThrough(carotid, 32000.0), 1.0, places=4)
+        self.typeCondition(widget, data.face_id(subclavian), bcs.RESISTANCE_KIND, "20000")
         widget.runSimulation()
-        self.assertAlmostEqual(pressureAtRight(), before * 13.5 / 13.0, places=2)
-        self.delayDisplay("A whole case on a Y")
+        self.assertAlmostEqual(drainsThrough(carotid, 16000.0), 1.0, places=4)
+        self.assertAlmostEqual(drainsThrough(subclavian, 20000.0), 1.0, places=4)
+        self.delayDisplay("A whole case on the testing aorta")

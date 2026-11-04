@@ -30,12 +30,20 @@ queue on a cluster, and times the steps, which says what the full run will cost.
 2. **Open SimVascular MultiPhysics** and select the mesh in **Volume mesh**. It has to be the
    volume mesh CFD Mesh Generator made, not the surface: a 3D simulation is solved on the volume
    elements.
-3. **Give every cap a condition** in the **Boundary conditions** table, exactly as in the ROM
-   panel. Any you already set there are shown here.
-   - **Inflow**: double-click the values to load a waveform from a `.flow` file, or select the
-     cell and type a steady flow in mL/s.
-   - **RCR**: `Rp, C, Rd, Pd`; `Pd` can be left out, and is then 0.
-   - **Resistance**: `R`.
+3. **Give every cap a condition** in the **Boundary conditions** table, as in the ROM panel:
+   its kind in **Type**, then its values, one to a labelled box. Any you already set there are
+   shown here. **An inflow is negative here**, into the model against the cap's outward normal,
+   as svMultiPhysics takes it.
+   - **Inflow**: drop the waveform's `.flow` file on Slicer and choose its table in the row's
+     **Flow table** column. A file written for svMultiPhysics -- a header line, then negative
+     flows -- is right as it is. A waveform for a 0D solver, or one set up in the ROM panel, is
+     positive: a warning sign beside its **Invert** box and the plot under the table, in orange,
+     say so, so tick **Invert**. Or type a steady
+     flow in **Q**, in mL/s, negative.
+     [SimVascular ROM Simulation](SimVascularROM.md#flow-files-and-their-sign) says how the table
+     is read and kept, and why each panel shows its own solver's sign.
+   - **RCR**: **Rp**, **C**, **Rd**, **Pd**; **Pd** can be left empty, and is then 0.
+   - **Resistance**: **R**.
 
    Every wall face is given a no-slip condition; there is nothing to set for them.
 4. **Check the settings** under **CFD Simulation**. Each group is collapsed and starts at the
@@ -132,9 +140,11 @@ A test is written beside it, never in it:
 | Resistance | `Neu`, `Resistance`, `Value` |
 | (every wall face) | `Dir`, `Steady`, `Value` 0: no slip |
 
-**Inflow is written negative.** The table takes an inflow as positive, into the model, as the 0D
-solvers do. svMultiPhysics measures a face's flow along its outward normal, so flow into the
-domain is negative, both in a `Value` and in a `.flow` file.
+**Inflow is written negative**, as the panel shows it. svMultiPhysics measures a face's flow
+along its outward normal, so flow into the domain is negative, both in a `Value` and in a `.flow`
+file. A positive value drives the flow out through the inlet. The conditions are kept positive
+into the model, as the 0D solvers and `svmpsetup` take them; the panel shows them negated, and
+`svmpsetup` writes them negated, so the file is the curve drawn.
 
 **A `.flow` file's header** is the number of time points and the number of Fourier coefficients
 the solver fits the waveform with (the *Inflow Fourier coefficients* setting, 16 by default). It

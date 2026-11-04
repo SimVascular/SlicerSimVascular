@@ -9,6 +9,9 @@ need `svromutils` -- the centerlines and the solver input -- run where it is ins
 svromutils`, which brings pip's VMTK with it), and are skipped elsewhere. So are the ones that run
 the solver, which is `pip install svzerod`'s `svzerodsolver`, found beside this Python whether or
 not its environment is activated -- or a build of its own, named by `SVZERODSOLVER`.
+
+The whole case is svReducedOrderModelingUtils' testing aorta, downloaded by `test_case.py` into
+pytest's cache the first time, or read from the folder `SVROM_TESTING_DATA` names.
 """
 
 import sys
