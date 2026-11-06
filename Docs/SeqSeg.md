@@ -6,9 +6,9 @@
 
 ![Example coronary segmentation in 3D Slicer](../SeqSeg/Resources/screenshot/coronary.png)
 
-**SeqSeg Vessel Segmentation** is a [3D Slicer](https://www.slicer.org/) module (internal module id: `seqseg`), listed in the module menu under both SimVascular and Segmentation. It is aimed at clinicians and researchers who want to segment tubular structures (for example coronary or other vessels) from CT or MR without drawing full contours. You place two seed points and a radius hint; the module runs the [SeqSeg](https://github.com/numisveinsson/SeqSeg) Python workflow with nnUNet models and loads the result back into Slicer. **Pretrained model weights are not something you train yourself:** choose a model under **Model Weights** and press **Run SeqSeg**. If that archive is not already on disk, Slicer asks to download it into its own SeqSeg folder and then uses that folder. No command-line nnUNet setup is required for typical use.
+**SeqSeg Vessel Segmentation** is a [3D Slicer](https://www.slicer.org/) module (internal module id: `seqseg`), listed under both SimVascular and Segmentation. It segments tubular structures (coronary arteries, aorta, Fontan pathways, and similar lumens) from CT or MR. You choose a pretrained model and place one or more seed lines. Each seed has its own radius in millimetres. The module runs the [SeqSeg](https://github.com/numisveinsson/SeqSeg) package and loads the segmentation and surface back into Slicer.
 
-The module selects a volume, seed lines, and a model, runs the SeqSeg CLI, then loads segmentation (.mha) and surface (.vtp) outputs.
+The seed line is the start and the tracking direction. It is not the radius: the distance between the two clicks used to be the radius so that each seed could differ, and a long direction then became a radius larger than the vessel. The radius now sits on that seed's row. Choosing a model sets the radius new seeds start with, and the number of tracking steps. Seeds you have already changed keep their own value. The line under the model reads the volume spacing and says whether those numbers are millimetres or centimetres, and what will be done with them. Aorta and Fontan networks were trained in centimetres, so a millimetre spacing is divided by 10 before the network sees it. A centimetre spacing is used as stored, and the radius (still entered in millimetres) is converted to match.
 
 ## Publication
 
@@ -18,203 +18,96 @@ Sveinsson Cepero, N., Shadden, S.C. SeqSeg: Learning Local Segments for Automati
 
 ## Prerequisites
 
-### PyTorch and nnUNet
+**Run SeqSeg** installs what is missing. It asks first. The download needs a network connection.
 
-**Run SeqSeg** installs **`torch` 2.2.2**, **`torchvision` 0.17.2**, and **`nnunetv2`** (at least **2.5.1**; at least **2.7.0** on macOS) when they are missing. It asks first. The download needs a network connection and can take several minutes. If NumPy is 2.x, it is downgraded to 1.x (torch 2.2.2 cannot import against NumPy 2) and the other packages are installed in that same run, held to NumPy 1 by a pip constraint. Slicer then asks for one restart so the process loads NumPy 1. The next Run does not downgrade NumPy again.
+- **PyTorch and nnUNet.** The first run installs `torch` 2.2.2, `torchvision` 0.17.2, and `nnunetv2` (at least 2.5.1; at least 2.7.0 on macOS). If NumPy is 2.x it is downgraded to 1.x, because torch 2.2.2 cannot import against NumPy 2, and Slicer then asks to restart. The confirm dialog says this before anything is installed. Later runs do not downgrade NumPy again.
+- **The PyTorch and NNUNet extensions are optional.** If they are already installed, SeqSeg uses them (`PyTorchUtils` and `SlicerNNUNetLib`), including a CUDA wheel chosen from the NVIDIA driver. If they are not installed, SeqSeg installs the same versions itself. Torch goes through [light-the-torch](https://github.com/Slicer/light-the-torch), because a plain `pip install torch` often fetches a wheel with no kernels for the GPU in the machine, and nnU-Net then reports that failure as an out-of-memory error. The SimVascular extension does not declare those extensions as dependencies: SeqSeg is the only module here that needs them, and declaring them would install PyTorch for every user of the meshing modules.
+- **The `seqseg` package** (`seqseg>=2.1.1`, then the latest release on PyPI). It is installed with `slicer.util.pip_install`, first with `--no-deps`, then its remaining dependencies, skipping packages Slicer already provides (SimpleITK, torch, torchvision, nnunetv2, numpy, requests, rt_utils).
+- **Weights.** Choose a model and press **Run SeqSeg**. If that archive is not on disk, Slicer asks before downloading it into `SeqSeg/weights` beside the user settings file. You do not pick a folder and you do not train a network. Aorta MR and Aorta CT share one archive (236.3 MB, [Zenodo](https://zenodo.org/records/15020477)). Coronary CT is separate (2.2 MB, [Zenodo](https://zenodo.org/records/23813298), folder `Dataset002_CASXCT`, 3d_fullres only). A `Dataset010_SEQCOROASOCACT` folder left from the previous archive is not used. Fontan MR (orig) is separate (about 10.7 MB, [Zenodo](https://zenodo.org/records/20056802)). An older tree in `~/SeqSeg_Weights` is reused. **Fontan MR (003)** has no archive, so it is not listed until a results folder already contains `Dataset091_VMR_FONTAN_003MR`.
 
-Two installers are used, in this order:
-
-1. If the **PyTorch** and **NNUNet** extensions are already installed, SeqSeg uses them (`PyTorchUtils` and `SlicerNNUNetLib`). That is the same path as other nnUNet modules in Slicer, and it picks a CUDA wheel from the installed NVIDIA driver.
-2. If those extensions are not installed, SeqSeg installs the same versions itself. Torch goes through [light-the-torch](https://github.com/Slicer/light-the-torch), which is what the PyTorch extension uses, because a plain `pip install torch` often fetches a wheel with no kernels for the GPU in the machine. nnU-Net then reports that failure as an out-of-memory error. **`nnunetv2`** is installed with its dependencies except the packages Slicer already provides (**SimpleITK**, **torch**, **torchvision**, **numpy**, **requests**).
-
-The extensions are optional. The SimVascular extension does **not** declare **PyTorch** and **NNUNet** in `EXTENSION_DEPENDS`. SeqSeg is the only module here that needs them, and declaring them would make the Extension Manager install PyTorch for every SimVascular user, including those who only use the meshing modules. The scripted module does not list them as hard Qt module dependencies either (same idea as Total Segmentator): otherwise Slicer would refuse to open SeqSeg until PyTorch loads, and you would not get the in-module install.
-
-### First-time Python setup
-
-The **SeqSeg Vessel Segmentation** module does **not** ship PyTorch or nnUNet wheels inside its own installer. On first **Run SeqSeg** (network required):
-
-1. If **`torch`** is not **2.2.2** (with **`torchvision` 0.17.2**), it is installed. Other torch versions are not supported.
-2. If **`nnunetv2`** is older than **2.5.1** (or missing), it is installed. On macOS the floor is **2.7.0**, because older nnunetv2 does not run under Rosetta.
-3. The **`seqseg`** PyPI package (**`seqseg>=2.1.1`**, the latest release on PyPI) is installed using **`slicer.util.pip_install`**, first with **`--no-deps`**, then its declared dependencies are installed selectively—**skipping** packages that must stay under Slicer’s control (**SimpleITK**, **torch**, **torchvision**, **nnunetv2**, **numpy**, **requests**, **rt_utils**), same pattern as extensions such as **Total Segmentator**. Later runs check PyPI and upgrade **`seqseg`** if a newer version is published.
-
-You may need to **restart Slicer** once after PyTorch or NumPy is changed; follow any prompt the module shows.
-
-### Neural network weights (pretrained models)
-
-Choose **Model Weights** (**Aorta MR**, **Aorta CT**, **Coronary CT**, or **Fontan MR (orig)**) and press **Run SeqSeg**. If that model’s weights are not already installed, Slicer asks before downloading them into a `SeqSeg/weights` folder beside its user settings file, then passes that folder to SeqSeg. You do not pick a save location, and you do **not** need to train networks or copy files by hand.
-
-Aorta MR and Aorta CT share one archive (236.3 MB, from [Zenodo](https://zenodo.org/records/15020477)), so downloading either model installs both. Coronary CT is a separate archive (about 2.7 MB, from [Zenodo](https://zenodo.org/records/19547894)). Fontan MR (orig) is a separate archive (about 10.7 MB, from [Zenodo](https://zenodo.org/records/20056802)), trained in cm. A later run of a model that is already present does not ask again. An older tree left in `~/SeqSeg_Weights` is reused instead of downloading the same archive twice. **Fontan MR (003)** has no archive.
-
-### Manual / advanced installation
-
-Use **Slicer’s** Python interpreter, not your system `python`. Example (adjust path to your Slicer install):
+Use Slicer's Python for a manual install, not the system `python`. That command installs only the `seqseg` package; **Run SeqSeg** still installs torch and nnunetv2 when they are missing:
 
 ```bash
 /path/to/Slicer-X.Y.Z/bin/PythonSlicer -m pip install --upgrade "seqseg>=2.1.1"
 ```
 
-**Run SeqSeg** installs **`torch`** and **`nnunetv2`** when they are missing, including when the PyTorch and NNUNet extensions are not installed. The command above only installs the **`seqseg`** package.
+## Tutorial: CTA-cardio
 
-## Tutorial sample data
+CTA-cardio is a cardiac CT angiography volume from the [Slicer testing data](https://github.com/Slicer/SlicerTestingData) collection. In **Sample Data**, under **SeqSeg Vessel Segmentation**, load **CTA-cardio**. The module registers that entry (SHA256 `3b0d4eb1a7d8ebb0c5a89cc0504640f76a030b4e869e33ff34c564c3d3b88ad2`).
 
-You can practice the workflow on **CTA-cardio**, a cardiac CT angiography–style volume from the [Slicer testing data](https://github.com/Slicer/SlicerTestingData) collection:
+To fetch it by hand: [download](https://github.com/Slicer/SlicerTestingData/releases/download/SHA256/3b0d4eb1a7d8ebb0c5a89cc0504640f76a030b4e869e33ff34c564c3d3b88ad2). Browsers often save that URL with no extension. Rename the file so it ends in `.nrrd` before loading it with **File → Add Data**.
 
-- **File**: `CTA-cardio.nrrd`
-- **SHA256**: `3b0d4eb1a7d8ebb0c5a89cc0504640f76a030b4e869e33ff34c564c3d3b88ad2`
-- **Download**: [https://github.com/Slicer/SlicerTestingData/releases/download/SHA256/3b0d4eb1a7d8ebb0c5a89cc0504640f76a030b4e869e33ff34c564c3d3b88ad2](https://github.com/Slicer/SlicerTestingData/releases/download/SHA256/3b0d4eb1a7d8ebb0c5a89cc0504640f76a030b4e869e33ff34c564c3d3b88ad2)
+This walkthrough uses **Aorta CT**. Do not choose Coronary CT for it.
 
-Browsers often save that URL as a file named only with the SHA256 hash and **no extension**. Before loading in Slicer, **rename the file** on disk to end with **`.nrrd`** (for example `CTA-cardio.nrrd`) so Slicer recognizes it as NRRD.
+1. Open **SeqSeg Vessel Segmentation** and select the volume.
+2. Set **Model** to **Aorta CT**. New seeds then start at radius **10 mm**, with 10 tracking steps. The line under the model should say the spacing is in millimetres and will be divided by 10, because CTA-cardio is a millimetre volume and Aorta CT was trained in centimetres. Image Unit and Scale, under **nnUNet Configuration**, are filled in to match that sentence. **nnUNet Type** `2d` is the faster first run on a laptop; `3d_fullres` is the default and takes longer.
+3. Click **Add Seed** once for each vessel you want tracked. On that row, set the radius in millimetres (10 mm is the aorta starting value; a second seed can be different). Click once inside the ascending aorta, near the root, then again a short distance along the same lumen toward the arch. Both clicks stay inside the contrast-filled vessel. The line is the direction tracking will walk.
+4. Click **Run SeqSeg**. Confirm the weights download if this is the first aorta run (one archive covers Aorta CT and Aorta MR). A progress dialog shows the log and can cancel the process. When tracking finishes, the segmentation is resampled onto the volume, placed under that volume in the data tree, and drawn on the slices. The surface mesh is loaded if SeqSeg wrote one.
 
-In 3D Slicer, use **File → Add Data**, paste the download URL, or choose the renamed file; confirm the checksum if prompted.
+The first click, in the ascending aorta:
 
-**For this tutorial**, use the **CT aorta** pipeline: under **nnUNet Configuration**, set **Model Weights** to **Aorta CT**. The first **Run SeqSeg** asks to download the shared aorta archive (CT and MR, 236.3 MB). Confirm it; the module saves the weights in Slicer’s SeqSeg folder and continues the run. Do not choose **Coronary CT** for this walkthrough.
+![CTA-cardio: start of the seed line in the ascending aorta](../SeqSeg/Resources/screenshot/seed_1.png)
 
-### Placing seed points on CTA-cardio (CT aorta)
+The second click, further along the ascending aorta. This distance is the tracking direction, not the radius:
 
-After the volume is in Slicer, open **SeqSeg Vessel Segmentation**, click **Auto-Create Seeds**, then **toggle on Planes visible in 3D** for the seed markups (so slice intersections show in the 3D view). Zoom into the anatomy and **drag the seed points** until they sit where you want (inside the vessel).
+![CTA-cardio: direction of the seed line, higher in the ascending aorta](../SeqSeg/Resources/screenshot/seed_2.png)
 
-Whether you used **Auto-Create Seeds** or the **Markups** module, you need two fiducials in the vessel. Place **Seed point 1** in the **ascending aorta** near the **aortic root / proximal ascending** segment, and **Seed point 2** **higher** along the same lumen toward the **arch**—both inside the contrast-filled vessel. Seed 1 is the start; seed 2 sets the initial tracking direction along the aorta.
+## What the panel shows
 
-**Seed point 1** (red markup **SeqSeg Seed Point 1**), centered in the ascending aorta on axial / coronal / sagittal slices:
+**Inputs** (open by default): the volume, the model, and the seed lines. Each seed row has its own radius in millimetres. The line under the model is the preset that model just applied. **Add Seed** creates a two-point line and turns on slice intersections so the clicks are visible in the 2D views. **Clear Seeds** removes every SeqSeg line. Extra complete seed lines are extra starts: **Max Branches** is raised to at least that count, and the spin box shows the value SeqSeg will use.
 
-![CTA-cardio tutorial: seed point 1 in the ascending aorta](../SeqSeg/Resources/screenshot/seed_1.png)
+**Segmentation Limits**, **nnUNet Configuration**, and **Output** start collapsed.
 
-**Seed point 2** (green markup **SeqSeg Seed Point 2**), placed superiorly along the ascending aorta relative to seed 1 (example slice positions in the 2D viewers):
+- **Tracking steps** (default 10). One step stops at the seed. **Max Branches** (default 1, raised to the number of seeds). **Max Steps per Branch** (default 20).
+- **nnUNet Type**: `3d_fullres` or `2d`.
+- **Image Unit** and **Scale** are set from the volume spacing when the volume or the model changes. The sentence under **Model** is the description of that choice. Edit these only when that sentence is wrong: millimetre header and a centimetre-trained model use **mm** and **0.1**; a centimetre header and the same model use **cm** and **1**; a centimetre header and the coronary model use **cm** and **10**.
+- **Force CPU** adds `-cpu`. Inference is much slower. The module also retries on CPU when PyTorch can see a GPU but has no kernels for it.
+- **Output directory**: defaults to `~/SeqSeg_Output/`. The volume is written as `.nii.gz` under `images/`, seeds go to `seeds.json`, and results land in `output/`.
+- **Output segmentation**: the node the result is written into. Empty means Run creates **SeqSeg Output** and selects it. A later run replaces the segments in that node instead of adding another segmentation beside it. The node is placed under the volume and resampled onto that volume's grid, then drawn on the slices. The 3D view shows the same segmentation.
+- **Generate SimVascular project**: writes `.pth` and `.ctgr` for the classic SimVascular application. Mesh Prep, ROM, and MultiPhysics do not read that project.
+- **Load Output File...**: load one segmentation or surface from a previous run. Run already loads both.
 
-![CTA-cardio tutorial: seed point 2 higher in the ascending aorta](../SeqSeg/Resources/screenshot/seed_2.png)
+## Presets
 
-### Tutorial module settings (CTA-cardio, CT aorta)
+Choosing a model sets the radius that new seeds start with, and the step count. A seed whose radius you have edited is left alone. Image Unit and Scale then follow the volume. The table is the millimetre case. A centimetre spacing (numbers about ten times smaller, for example 0.08 instead of 0.8) uses Image Unit **cm**, Scale **1** for aorta and Fontan, and Scale **10** for coronary. The radius box stays in millimetres either way.
 
-Before **Run SeqSeg**, align **Inputs**, **Segmentation Limits**, and **nnUNet Configuration** with the tutorial setup below. Example from the module UI:
+| Model | Trained in | Image Unit | Scale | Radius | Tracking steps |
+| --- | --- | --- | --- | --- | --- |
+| Aorta MR | cm | mm | 0.1 | 10 mm | 10 |
+| Aorta CT | cm | mm | 0.1 | 10 mm | 10 |
+| Coronary CT | mm | mm | 1 | 2 mm | 10 |
+| Fontan MR (orig) | cm | mm | 0.1 | 10 mm | 10 |
 
-![CTA-cardio tutorial: recommended Inputs, Segmentation Limits, and nnUNet settings](../SeqSeg/Resources/screenshot/settings_screenshot.png)
+A fresh panel starts on **Aorta MR** with that row. CTA-cardio is CT, so switch to **Aorta CT** before running it. The same aorta archive installs both.
 
-- **Image Unit** = **mm** and **Scale** = **0.1**: the bundled deep-learning weights for this walkthrough were trained with **centimeter**–style image spacing; typical Slicer CT volumes (including CTA-cardio) use **millimeter** voxel spacing. Choosing **mm** for the image and **0.1** for **Scale** maps the volume to the physical scale the model expects. Wrong combinations here are a common cause of poor or misaligned results (the in-module Scale explanation under **nnUNet Configuration** describes the same rule in general form).
-- **nnUNet Type** = **2d**: use the **2D** model for **faster inference** while following the tutorial (especially on a laptop or for a first run). **3d_fullres** is available if you prefer the full-resolution 3D configuration and can accept longer run times.
+## Technical details
 
-Other fields in the screenshot (e.g. **Model Weights** **Aorta CT**, radius **10** (mm, same as volume unit), **Nr. of Steps** **2**) are reasonable starting points for this dataset; adjust if your machine or case needs it. The figure is from an earlier panel: set **Model Weights** to **Aorta CT**, and let **Run SeqSeg** fetch the weights.
+The module follows the [SeqSeg CLI](https://github.com/numisveinsson/SeqSeg/tree/main). It does not import the `seqseg` package: this file is itself named `seqseg`, so the import would load the module. The console script is run as a process, and the progress dialog drains its output so the panel does not freeze.
 
-## Usage
+1. The output directory becomes the SeqSeg data directory, with an `images/` subdirectory.
+2. The input volume is saved there as `{VolumeName}.nii.gz`. Slicer writes that file in millimetres.
+3. `seeds.json` holds one case, named from the volume. Each seed is `[start, direction, radius]`. Coordinates are LPS (the panel's coordinate choice is fixed at LPS world). Each seed's radius is stored on that seed, in millimetres. SeqSeg sizes the patch as radius divided by the spacing numbers in the file, so a centimetre spacing (detected when the largest spacing is below 0.3) is written with the radius divided by 10. A millimetre spacing is written unchanged. Image Unit and Scale do not rescale the seed points; they tell the network how to read that same spacing.
+4. The command is `seqseg` with `-nnunet_type`, `-train_dataset`, `-unit`, `-scale`, `-max_n_steps`, `-max_n_branches`, `-max_n_steps_per_branch`, and `-config_name aorta_tutorial`. The SeqSeg CLI's own default config name is `global`; this module always passes `aorta_tutorial`. `-cpu` is added when **Force CPU** is checked, or when a test kernel cannot run on the GPU. `-simvascular 1` is added when the project checkbox is on.
+5. The segmentation loaded is the one this run just wrote for this volume: `{case}_segmentation_*_steps`, and only if its modification time is from this run. A previous volume's mask in the same folder is left where it is. A file marked `_0_steps` is treated as failure: tracking never left the seed. The surface loaded is this run's smoothed mesh for the same case.
 
-1. **Load your volume**: Use the Data module or File menu to load your medical imaging volume, or the [tutorial sample data](#tutorial-sample-data) above (`CTA-cardio.nrrd`).
-
-2. **Create and refine seed points** (typical workflow after loading):
-   - Open **SeqSeg Vessel Segmentation** and select your volume when you get to that step, then click **Auto-Create Seeds** so the module creates the two fiducial markups for you.
-   - **Toggle on Planes visible in 3D** for those seed markups (in the markups display / 3D view options) so you can see how the seeds line up with the volume in 3D.
-   - Zoom the 3D view (and use the slice viewers as needed) and **drag the seed points** to move them onto the vessel centerline where you want them.
-   - **Alternative (manual):** In the **Markups** module, create two fiducial points with **Add** and place them in the slice viewers; you can still enable **Planes visible in 3D** and drag points the same way.
-   - For **CTA-cardio** and **CT aorta**, follow [Placing seed points on CTA-cardio (CT aorta)](#placing-seed-points-on-cta-cardio-ct-aorta) for where to put each seed.
-
-3. **Finish settings and run SeqSeg** (in **SeqSeg Vessel Segmentation**, which you already opened for seeds):
-   - On the first run, confirm the package install if Slicer asks ([Prerequisites](#prerequisites)). **torch 2.2.2** and **nnunetv2** are installed then, whether or not the PyTorch and NNUNet extensions are present.
-   - Confirm **Input Volume** and both **Seed Point** markups match what you set up above (open the module from the module menu under SimVascular or Segmentation if you closed it—you can search for *vessel*, *segmentation*, or *SeqSeg*).
-   - Set the radius estimate (approximate size of the structure you want to segment)
-   - For **CTA-cardio** + **CT aorta**, set **Image Unit** to **mm**, **Scale** to **0.1**, and consider **nnUNet Type** **2d** as in [Tutorial module settings (CTA-cardio, CT aorta)](#tutorial-module-settings-cta-cardio-ct-aorta)
-   - Configure **nnUNet** (expand **nnUNet Configuration** if needed—it opens expanded by default):
-     - **Model Weights**: **Aorta MR**, **Aorta CT**, **Coronary CT**, or **Fontan MR (orig)**. You do **not** train models, pick a folder, or use the terminal. On **Run SeqSeg**, if that archive is missing, Slicer asks to download it ([Zenodo](https://zenodo.org/records/15020477) for the shared aorta archive, ~236 MB; [Zenodo](https://zenodo.org/records/19547894) for coronary CT, ~2.7 MB; [Zenodo](https://zenodo.org/records/20056802) for Fontan MR (orig), ~10.7 MB) into its SeqSeg folder and then uses that folder. Aorta MR and Aorta CT are one download. Declining the download stops the run.
-     - Choose nnUNet type (3d_fullres or 2d)
-     - The aorta models and Fontan MR (orig) were trained with **cm-scale** voxel spacing; the coronary model was trained with **mm-scale** spacing—align **Image Unit** (under **Inputs**) and **Scale** (**nnUNet Configuration**) with your volume and that training convention. The dataset id SeqSeg receives (`Dataset005_SEQAORTANDFEMOMR`, `Dataset006_SEQAORTANDFEMOCT`, `Dataset010_SEQCOROASOCACT`, or `Dataset090_VMR_FONTAN_ORIGMR`) follows the **Model Weights** choice.
-   - Create or select an output segmentation node
-   - Click "Run SeqSeg"
-
-## Module Interface
-
-### Inputs
-- **Input Volume**: The medical imaging volume to segment (NIfTI format recommended)
-- **Image Unit**: Physical unit of the volume spacing as interpreted by the module (**cm** or **mm**); must be consistent with **Scale** in **nnUNet Configuration** for the selected **Model Weights**
-- **Seed Point 1**: First markups fiducial node (must contain at least one point)
-- **Seed Point 2**: Second markups fiducial node (must contain at least one point)
-- **Radius Estimate**: Estimated radius of the structure to segment in millimeters (range: 0.1 - 100 mm)
-
-### Segmentation Limits
-- **Nr. of Steps**: Maximum number of tracking steps (1 - 10000, default: 10)
-- **Max Branches**: Maximum number of vessel branches to follow (1 - 100, default: 1). Raised automatically to at least the number of complete seeds so extra seed lines are used as starts.
-- **Max Steps per Branch**: Maximum steps per vessel branch (1 - 1000, default: 5)
-
-### nnUNet Configuration
-This section opens **expanded** by default. **Run SeqSeg** checks the selected model, asks once if its archive is missing, and saves it under Slicer’s user settings (`SeqSeg/weights`).
-- **nnUNet Type**: Type of nnUNet model (3d_fullres or 2d, default: 3d_fullres)
-- **Model Weights** (dropdown): **Aorta MR** (`Dataset005_SEQAORTANDFEMOMR`), **Aorta CT** (`Dataset006_SEQAORTANDFEMOCT`), **Coronary CT** (`Dataset010_SEQCOROASOCACT`), or **Fontan MR (orig)** (`Dataset090_VMR_FONTAN_ORIGMR`). Aorta MR and Aorta CT share one 236.3 MB archive from [Zenodo](https://zenodo.org/records/15020477). That zip has `Dataset005_…` and `Dataset006_…` at the top, so they land directly in `SeqSeg/weights` and that folder is the results path. Coronary CT is a separate ~2.7 MB archive from [Zenodo](https://zenodo.org/records/19547894). Fontan MR (orig) is a separate ~10.7 MB archive from [Zenodo](https://zenodo.org/records/20056802), unpacked under `nnUNet_results_fontan_orig`. **Training units:** the aorta models and Fontan MR (orig) were trained on **cm-scale** data; the coronary model was trained on **mm-scale** data (the module shows this hint under the dropdown). A model counts as installed only when its dataset folder is inside the results tree, so a coronary download does not satisfy an aorta run. **Fontan MR (003)** is also listed and has no archive, so Run continues only when a previously stored results folder already contains that dataset directory, and otherwise stops.
-- **Device** → **Force CPU (no GPU)** (checkbox, default off): Runs nnUNet inference on the CPU by adding **`-cpu`** to the SeqSeg command, skipping the GPU entirely. Leave it off to use the GPU when one is available. Turn it on when the machine has no usable GPU, or when GPU runs fail with a CUDA error such as *no kernel image is available for execution on the device*. CPU inference is considerably slower, so prefer **nnUNet Type** **2d** and a small **Nr. of Steps** when testing.
-
-### Output
-- **Output Segmentation**: Segmentation node where the result will be stored
-- **Output Directory**: Directory where SeqSeg saves all results including segmentation (.mha), surface mesh (.vtp), and intermediate files
-
-### Visualization Features
-After running SeqSeg, use the visualization buttons to load results:
-- **Load Segmentation**: Loads the most recent .mha segmentation file as a segmentation overlay
-- **Load Surface Mesh**: Loads the most recent .vtp surface mesh as a 3D model
-- **Browse All Output Files**: Opens a dialog to view and selectively load output files (segmentations, meshes, etc.)
-
-Output files are organized in the structure:
-```
+```text
 output_directory/
-├── images/           # Input volume (converted to .nii.gz)
-├── seeds.json       # Seed points in SeqSeg format
-└── output/          # SeqSeg results
-    ├── *_seg_containing_seeds_*_steps.mha  # Segmentation
-    └── *_surface_mesh_*_steps.vtp          # Surface mesh
+├── images/          # input volume as .nii.gz
+├── seeds.json
+└── output/
+    ├── {VolumeName}_segmentation_*_steps.mha
+    └── {VolumeName}_surface_mesh_*_steps.vtp
 ```
-
-## Technical Details
-
-The extension follows the [SeqSeg CLI interface](https://github.com/numisveinsson/SeqSeg/tree/main):
-
-1. **Creates data directory structure**: Sets up a temporary workspace with an `images/` subdirectory
-2. **Saves input volume**: Exports the input volume as a NIfTI file in the `images/` subdirectory
-3. **Creates seeds.json**: Generates a `seeds.json` file in the data directory with the format:
-   ```json
-   [
-     {
-       "name": "case_001",
-       "seeds": [
-         [[x1, y1, z1], [x2, y2, z2], radius_estimate]
-       ]
-     }
-   ]
-   ```
-   Where `name` matches the image filename (without extension), the first point is the start seed, the second point is the direction seed, and the third value is the radius estimate in millimeters.
-4. **Executes SeqSeg**: Runs the SeqSeg command-line tool with parameters:
-   - `-data_dir`: Path to the temporary data directory
-   - `-nnunet_results_path`: Path to trained nnUNet models (filled in by the module from **Model Weights**; the panel does not ask for it)
-   - `-nnunet_type`: Model architecture (3d_fullres or 2d)
-   - `-train_dataset`: Dataset name used for training
-   - `-img_ext`: Image file extension (.nii.gz)
-   - `-config_name`: Configuration name (default: global)
-   - `-outdir`: Output directory for results
-   - `-unit`: Image coordinate units (mm or cm)
-   - `-max_n_steps`: Maximum tracking steps (same quantity as **Nr. of Steps** in the module UI)
-   - `-max_n_branches`: Maximum number of branches
-   - `-max_n_steps_per_branch`: Maximum steps per branch
-   - `-cpu`: Added when **Force CPU (no GPU)** is checked, or automatically when the GPU cannot run PyTorch kernels, to keep nnU-Net inference on the CPU (requires `seqseg` 2.1.1 or newer)
-5. **Loads results**: Imports the resulting segmentation file back into 3D Slicer
-6. **Converts to segmentation**: Converts the volume to a Slicer segmentation node for visualization
 
 ## Troubleshooting
 
-- **PyTorch / nnUNet install failed**: Check the **Python Interactor** log for `pip` output and confirm network access. **Run SeqSeg** installs **`torch` 2.2.2** and **`nnunetv2`** itself when the PyTorch and NNUNet extensions are not installed. If those extensions are installed, the **PyTorch Util** and **nnUNet** modules can install the same versions.
-- **Dependency installation cancelled or failed**: Check the **Python Interactor** log for `pip` output. Confirm network access. A cancelled confirm dialog leaves the packages uninstalled; run SeqSeg again and accept the install.
-- **Restart requested after install**: Complete any dependency dialog; restart Slicer when the module asks so newly installed packages load cleanly.
-- **"SeqSeg dependency installation failed"** or **`seqseg`** still missing**: Install **`seqseg>=2.1.1`** with **`PythonSlicer -m pip`** ([Manual / advanced installation](#manual--advanced-installation)) after **`torch`** and **`nnunetv2`** import.
-- **"Seed point is not defined"**: Make sure both markups nodes contain at least one fiducial point.
-- **"SeqSeg execution failed"** or a weights download error: Run SeqSeg again and accept the download for the selected **Model Weights** entry. Aorta CT and Aorta MR are one archive; Coronary CT and Fontan MR (orig) are separate archives. Cancelling the confirm dialog stops the run before SeqSeg starts. The files land in `SeqSeg/weights` beside Slicer’s user settings (or an existing `~/SeqSeg_Weights` tree is reused).
-- **"No output segmentation file found"**: SeqSeg may have failed silently—check the Slicer console for detailed error messages.
-- **"no kernel image is available for execution on the device"**: The installed **`torch`** build has no CUDA kernels for your GPU architecture, so nnU-Net inference cannot run there. nnU-Net reports this as a memory problem, but it is not. The module detects it, reruns SeqSeg with **`-cpu`**, and fails the run if tracking still segments nothing (for example a `_0_steps` output file). Check **Force CPU (no GPU)** under **nnUNet Configuration** to skip the failing GPU attempt altogether. The first-run install asks light-the-torch for a wheel that matches the NVIDIA driver; if that wheel still cannot run on this GPU, install a matching build (the **PyTorch Util** module can do that when the PyTorch extension is installed).
-- **Segmentation appears in wrong location**: Check that your volume and seed points are in the same coordinate system.
-- **Permission errors during install**: Try running Slicer with appropriate permissions for writing under its Python environment, or install packages manually with **`PythonSlicer -m pip`** after diagnosing the error.
-
-## Prerequisites for SeqSeg
-
-**Using this extension:** **Run SeqSeg** installs **`torch` 2.2.2** and **`nnunetv2` 2.5.1** (2.7.0 or newer on macOS) into Slicer’s Python when they are missing ([Prerequisites](#prerequisites)), and downloads the pretrained weights for the selected **Model Weights** entry when they are not already installed. No manual command-line nnUNet training for typical use.
-
-The underlying SeqSeg / nnUNet stack ultimately needs:
-1. **`torch` 2.2.2** (with **`torchvision` 0.17.2**) and **`nnunetv2`**, installed into Slicer’s Python by **Run SeqSeg**. The PyTorch and NNUNet extensions are used when they are installed; otherwise the module installs the packages itself. A system-wide `pip install` into a different Python is not the interpreter SeqSeg runs.
-2. The **`seqseg`** Python package (**`seqseg>=2.1.1`**, upgraded to the latest PyPI release when a newer one is available) plus its remaining dependencies, installed via **`slicer.util.pip_install`** with selective skipping of Slicer-managed packages (see [First-time Python setup](#first-time-python-setup)).
-3. **Trained model files** on disk. **Run SeqSeg** downloads them for **Aorta MR**, **Aorta CT**, **Coronary CT**, and **Fontan MR (orig)** into Slicer’s `SeqSeg/weights` folder (`Dataset005_SEQAORTANDFEMOMR`, `Dataset006_SEQAORTANDFEMOCT`, `Dataset010_SEQCOROASOCACT`, or `Dataset090_VMR_FONTAN_ORIGMR`).
-4. Compatible image formats (NIfTI recommended).
-
-For more information about SeqSeg, see the [official SeqSeg repository](https://github.com/numisveinsson/SeqSeg).
+- **PyTorch / nnUNet install failed, or the install was cancelled.** Read the Python Interactor for the pip output and confirm the machine can reach the network. Run again and accept the dialog. A restart is required after NumPy or torch changes; the module asks.
+- **Weights were not downloaded.** Run again and accept the download for the model you selected. Cancelling stops the run before SeqSeg starts. Fontan MR (003) is absent from the list until its dataset folder is already on disk.
+- **SeqSeg failed, and the detail is empty.** The dialog includes both stdout and stderr. A tool that prints the reason only on stdout used to show a blank error.
+- **"no kernel image is available for execution on the device".** The installed torch build has no CUDA kernels for this GPU. nnU-Net reports it as a memory error. The module reruns with `-cpu`. Check **Force CPU** to skip the failing GPU attempt. A matching wheel can be installed from **PyTorch Util** when the PyTorch extension is present.
+- **The segmentation is empty or a 0-step file.** Tracking did not leave the seed. Check that both clicks are inside the lumen, that the second click points along the vessel, and that the model matches the modality. Read the sentence under **Model**: it should agree with the spacing. If it says the run is set to a different Image Unit or Scale than the spacing wants, set those two controls to the values it names.
+- **Cancel** stops the seqseg process. It does not roll back a package install that already finished.
+- **The window sits on "Running SeqSeg" for a long time.** `3d_fullres` on a full volume is slow. The progress dialog's last line is the process log. `2d` and fewer tracking steps are the shorter test.
 
 ## Development
 

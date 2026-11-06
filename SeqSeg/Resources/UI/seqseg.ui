@@ -14,7 +14,7 @@
    <item>
     <widget class="QLabel" name="dependencyDescriptorLabel">
      <property name="text">
-      <string>First Run installs torch 2.2.2 and nnunetv2 2.5.1 if they are missing. The PyTorch and NNUNet extensions are used when they are installed.</string>
+      <string>The first Run SeqSeg can install PyTorch and nnUNet (several minutes, and Slicer may ask to restart) and then download the selected model weights. The PyTorch and NNUNet extensions are used when they are installed.</string>
      </property>
      <property name="wordWrap">
       <bool>true</bool>
@@ -59,43 +59,54 @@
        </widget>
       </item>
       <item row="1" column="0">
-       <widget class="QLabel" name="unitLabel">
+       <widget class="QLabel" name="trainDatasetLabel">
         <property name="text">
-         <string>Image Unit:</string>
+         <string>Model:</string>
         </property>
        </widget>
       </item>
       <item row="1" column="1">
-       <widget class="QComboBox" name="unitComboBox">
+       <widget class="QComboBox" name="trainDatasetComboBox">
         <property name="toolTip">
-         <string>Unit of the medical image</string>
+         <string>Pretrained model. Choosing one sets the radius and the tracking steps. The line below reads the volume spacing and sets Image Unit and Scale for millimetres or centimetres. If the weights are not already in Slicer's SeqSeg folder, Run SeqSeg asks to download them.</string>
         </property>
-        <property name="currentIndex">
-         <number>0</number>
+        <property name="sizeAdjustPolicy">
+         <enum>QComboBox::AdjustToMinimumContentsLengthWithIcon</enum>
         </property>
-        <property name="SlicerParameterName" stdset="0">
-         <string>imageUnit</string>
+        <property name="minimumContentsLength">
+         <number>12</number>
+        </property>
+        <property name="editable">
+         <bool>false</bool>
         </property>
         <item>
          <property name="text">
-          <string>cm</string>
-         </property>
-        </item>
-        <item>
-         <property name="text">
-          <string>mm</string>
+          <string>Aorta MR</string>
          </property>
         </item>
        </widget>
       </item>
-      <item row="2" column="0">
+      <item row="2" column="0" colspan="2">
+       <widget class="QLabel" name="presetHintLabel">
+        <property name="text">
+         <string>Spacing is read from the volume. A millimetre aorta scan is divided by 10 before the network sees it. A centimetre scan is used as stored, and the radius is converted to match.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+        <property name="styleSheet">
+         <string>QLabel { color: palette(shadow); font-size: 11px; }</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
        <widget class="QLabel" name="seedsLabel">
         <property name="text">
          <string>Seeds:</string>
         </property>
        </widget>
       </item>
-      <item row="2" column="1">
+      <item row="3" column="1">
        <widget class="QWidget" name="seedsBlockWidget">
         <layout class="QVBoxLayout" name="seedsBlockLayout">
          <property name="leftMargin">
@@ -116,17 +127,23 @@
          <item>
           <widget class="QLabel" name="seedsHintLabel">
            <property name="text">
-            <string>Each seed is a 2-point line (start to direction). Radius is the line length in image units.</string>
+            <string>Each seed is its own line and its own radius. Click the start inside the vessel, then a short step along it. The line is the tracking direction. The millimetre value on that row is the radius.</string>
            </property>
            <property name="wordWrap">
             <bool>true</bool>
+           </property>
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Preferred" vsizetype="Minimum">
+             <horstretch>0</horstretch>
+             <verstretch>0</verstretch>
+            </sizepolicy>
            </property>
           </widget>
          </item>
          <item>
           <widget class="QWidget" name="seedRowsWidget">
            <property name="sizePolicy">
-            <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
+            <sizepolicy hsizetype="Preferred" vsizetype="Minimum">
              <horstretch>0</horstretch>
              <verstretch>0</verstretch>
             </sizepolicy>
@@ -158,7 +175,7 @@
               <string>Add Seed</string>
              </property>
              <property name="toolTip">
-              <string>Create a seed line and click start then direction in a viewer. Radius is the line length.</string>
+              <string>Add a seed with its own radius. Click the start, then a point a short distance along the vessel. That distance is the tracking direction, not the radius.</string>
              </property>
             </widget>
            </item>
@@ -199,20 +216,20 @@
       <string>Segmentation Limits</string>
      </property>
      <property name="collapsed">
-      <bool>false</bool>
+      <bool>true</bool>
      </property>
      <layout class="QFormLayout" name="formLayout_parameters">
       <item row="0" column="0">
        <widget class="QLabel" name="maxStepsLabel">
         <property name="text">
-         <string>Nr. of Steps:</string>
+         <string>Tracking steps:</string>
         </property>
        </widget>
       </item>
       <item row="0" column="1">
        <widget class="QSpinBox" name="maxStepsSpinBox">
         <property name="toolTip">
-         <string>Maximum number of steps for segmentation</string>
+         <string>How many tracking steps to take along the vessel from each seed. One step stops at the seed.</string>
         </property>
         <property name="minimum">
          <number>1</number>
@@ -221,7 +238,7 @@
          <number>10000</number>
         </property>
         <property name="value">
-         <number>1</number>
+         <number>10</number>
         </property>
         <property name="SlicerParameterName" stdset="0">
          <string>maxSteps</string>
@@ -289,7 +306,7 @@
       <string>nnUNet Configuration</string>
      </property>
      <property name="collapsed">
-      <bool>false</bool>
+      <bool>true</bool>
      </property>
      <layout class="QFormLayout" name="formLayout_nnunet">
       <item row="0" column="0">
@@ -320,60 +337,33 @@
        </widget>
       </item>
       <item row="1" column="0">
-       <widget class="QLabel" name="trainDatasetLabel">
+       <widget class="QLabel" name="unitLabel">
         <property name="text">
-         <string>Model Weights:</string>
+         <string>Image Unit:</string>
         </property>
        </widget>
       </item>
       <item row="1" column="1">
-       <widget class="QComboBox" name="trainDatasetComboBox">
+       <widget class="QComboBox" name="unitComboBox">
         <property name="toolTip">
-         <string>Pretrained model to use. If its weights are not already in Slicer's SeqSeg folder, Run SeqSeg asks to download them and then uses that folder. Aorta MR, Aorta CT, and Fontan MR (orig) were trained in cm; Coronary CT was trained in mm. Fontan MR (003) has no automatic download. Match Image Unit (under Inputs) and Scale (below) accordingly. The real nnUNet dataset id is applied automatically when running SeqSeg.</string>
+         <string>Unit SeqSeg should treat the volume header as. Slicer volumes are millimetres. Choosing a model sets this. Centimetres is only for a volume whose spacing is actually stored in cm.</string>
         </property>
-        <property name="sizeAdjustPolicy">
-         <enum>QComboBox::AdjustToMinimumContentsLengthWithIcon</enum>
+        <property name="currentIndex">
+         <number>0</number>
         </property>
-        <property name="minimumContentsLength">
-         <number>12</number>
-        </property>
-        <property name="editable">
-         <bool>false</bool>
+        <property name="SlicerParameterName" stdset="0">
+         <string>imageUnit</string>
         </property>
         <item>
          <property name="text">
-          <string>Aorta MR</string>
+          <string>mm</string>
          </property>
         </item>
         <item>
          <property name="text">
-          <string>Aorta CT</string>
+          <string>cm</string>
          </property>
         </item>
-        <item>
-         <property name="text">
-          <string>Coronary CT</string>
-         </property>
-        </item>
-       </widget>
-      </item>
-      <item row="2" column="0" colspan="2">
-       <widget class="QLabel" name="trainDatasetUnitsHintLabel">
-        <property name="text">
-         <string>Aorta MR, Aorta CT, and Fontan MR (orig) were trained on cm-scale data; Coronary CT was trained on mm-scale data. Set Image Unit under Inputs and Scale below to match your volume and the model.</string>
-        </property>
-        <property name="wordWrap">
-         <bool>true</bool>
-        </property>
-        <property name="sizePolicy">
-         <sizepolicy hsizetype="Ignored" vsizetype="Preferred">
-          <horstretch>0</horstretch>
-          <verstretch>0</verstretch>
-         </sizepolicy>
-        </property>
-        <property name="styleSheet">
-         <string>QLabel { color: palette(shadow); font-size: 11px; }</string>
-        </property>
        </widget>
       </item>
       <item row="3" column="0">
@@ -386,10 +376,10 @@
       <item row="3" column="1">
        <widget class="QComboBox" name="scaleComboBox">
         <property name="toolTip">
-         <string>Relates nnUNet training voxel units to your Image Unit. Use 10 if the model was trained in mm and your volume is in cm; use 0.1 if the model was trained in cm and your volume is in mm; use 1 when training units match the image (default).</string>
+         <string>Relates nnUNet training units to Image Unit. Choosing a model sets this for a millimetre volume: 0.1 if the model was trained in cm, 1 if it was trained in mm, 10 the other way around.</string>
         </property>
         <property name="currentIndex">
-         <number>1</number>
+         <number>0</number>
         </property>
         <property name="SlicerParameterName" stdset="0">
          <string>scale</string>
@@ -414,7 +404,7 @@
       <item row="4" column="0" colspan="2">
        <widget class="QLabel" name="scaleExplanationLabel">
         <property name="text">
-         <string>Scale matches nnUNet training units to Image Unit: if the model was trained in mm and the image is in cm, choose 10; if the model was trained in cm and the image is in mm, choose 0.1; if units match, choose 1 (default).</string>
+         <string>Choosing a model sets this for a millimetre volume. 0.1 when the network was trained in cm (aorta, Fontan). 1 when it was trained in mm (coronary). 10 is the other way around.</string>
         </property>
         <property name="wordWrap">
          <bool>true</bool>
@@ -461,6 +451,9 @@
      <property name="text">
       <string>Output</string>
      </property>
+     <property name="collapsed">
+      <bool>true</bool>
+     </property>
      <layout class="QFormLayout" name="formLayout_output">
       <item row="0" column="0">
        <widget class="QLabel" name="outputDirectoryLabel">
@@ -489,7 +482,13 @@
       <item row="1" column="1">
        <widget class="qMRMLNodeComboBox" name="outputSegmentationSelector">
         <property name="toolTip">
-         <string>Select output segmentation node</string>
+         <string>Segmentation node the result is written into. Leave this empty and Run creates one. A later run replaces the segments in the selected node.</string>
+        </property>
+        <property name="noneEnabled">
+         <bool>true</bool>
+        </property>
+        <property name="noneDisplay" stdset="0">
+         <string>Create on run</string>
         </property>
         <property name="nodeTypes">
          <stringlist notr="true">
@@ -517,7 +516,7 @@
       <item row="2" column="1">
        <widget class="QCheckBox" name="simvascularCheckBox">
         <property name="toolTip">
-         <string>If checked, SeqSeg writes a SimVascular project layout (simvascular/ dirs with .pth, .ctgr).</string>
+         <string>Writes .pth and .ctgr files for the classic SimVascular application. Mesh Prep, ROM, and MultiPhysics do not read that project.</string>
         </property>
         <property name="text">
          <string>Generate SimVascular project</string>
@@ -531,63 +530,14 @@
        </widget>
       </item>
       <item row="3" column="0" colspan="2">
-       <widget class="QLabel" name="visualizationLabel">
+       <widget class="QPushButton" name="browseOutputsButton">
         <property name="text">
-         <string>Visualization Results:</string>
+         <string>Load Output File...</string>
         </property>
-        <property name="font">
-         <font>
-          <weight>75</weight>
-          <bold>true</bold>
-         </font>
-        </property>
-        <property name="styleSheet">
-         <string>QLabel {
-    color: #2E86AB;
-    padding: 8px 0px 4px 0px;
-    border-bottom: 1px solid #E0E0E0;
-    margin-bottom: 5px;
-}</string>
+        <property name="toolTip">
+         <string>Load one segmentation or surface from a previous run. Run already loads both.</string>
         </property>
        </widget>
-      </item>
-      <item row="4" column="0" colspan="2">
-       <layout class="QVBoxLayout" name="visualizationButtonsLayout">
-        <item>
-         <layout class="QHBoxLayout" name="primaryVisualizationLayout">
-          <item>
-           <widget class="QPushButton" name="loadSegmentationButton">
-            <property name="text">
-             <string>Load Segmentation</string>
-            </property>
-            <property name="toolTip">
-             <string>Load the latest segmentation (.mha) file as an overlay</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QPushButton" name="loadSurfaceMeshButton">
-            <property name="text">
-             <string>Load Surface Mesh</string>
-            </property>
-            <property name="toolTip">
-             <string>Load the latest 3D surface mesh (.vtp) file</string>
-            </property>
-           </widget>
-          </item>
-         </layout>
-        </item>
-        <item>
-         <widget class="QPushButton" name="browseOutputsButton">
-          <property name="text">
-           <string>Browse All Output Files</string>
-          </property>
-          <property name="toolTip">
-           <string>Browse and selectively load all output files from the results directory</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
       </item>
      </layout>
     </widget>
@@ -656,9 +606,7 @@ QPushButton:disabled {
    <item>
     <widget class="QLabel" name="instructionsLabel">
      <property name="text">
-      <string>Quick start: load a volume, click Add Seed and place a 2-point line (start then direction; radius is the line length), optionally add more seeds, choose Model Weights under nnUNet Configuration, set the output folder, and Run SeqSeg. If those weights are not installed, Slicer asks to download them into its SeqSeg folder and then runs. Then use Load Segmentation / Load Surface Mesh / Browse All Output Files.
-
-Details: NIfTI is recommended. Image unit (mm/cm) must match your volume and the model (Aorta MR/CT and Fontan MR (orig) were trained in cm; Coronary CT in mm). First run may install dependencies and take longer. Results live under output_directory/output/.</string>
+      <string>Quick start: load a volume, choose the model, click Add Seed once per vessel and set that row's radius in millimetres, place a short line along the vessel, then Run SeqSeg. The first run may install PyTorch and nnUNet and download weights. The segmentation and surface load when tracking finishes.</string>
      </property>
      <property name="wordWrap">
       <bool>true</bool>
