@@ -2528,6 +2528,11 @@ class seqsegLogic(ScriptedLoadableModuleLogic):
         # several tests at a time. Changing packages there (for example
         # downgrading NumPy) breaks the extensions tested after this one.
         if self._slicerTesting():
+            logging.warning(
+                "SeqSeg: %s is missing and is not installed while Slicer is running with --testing; "
+                "the steps that need it are skipped.",
+                requirement,
+            )
             raise InstallError(
                 _("Python packages are not installed while Slicer is running with --testing ({requirement}).").format(
                     requirement=requirement
@@ -2768,6 +2773,16 @@ class seqsegLogic(ScriptedLoadableModuleLogic):
 
         minimum_v = pkg_version.parse(self.MINIMUM_SEQSEG_VERSION)
         installed_v = pkg_version.parse(installed_version) if installed_version else None
+        if self._slicerTesting() and installed_v is not None and installed_v >= minimum_v:
+            # Under --testing nothing is installed (see _pipInstall). An installed seqseg that
+            # meets the minimum is enough to run the test; do not "upgrade" it to the latest
+            # PyPI release, which would only make the test skip.
+            logging.info(
+                _("SeqSeg Python package {version} is installed; not checking PyPI for updates while testing.").format(
+                    version=installed_version
+                )
+            )
+            return None
         latest_str = self._latest_pypi_version(self.SEQSEG_PYTHON_PACKAGE_NAME)
         latest_v = None
         if latest_str:

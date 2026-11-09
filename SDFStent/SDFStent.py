@@ -1522,7 +1522,10 @@ class SDFStentTest(ScriptedLoadableModuleTest):
         if importlib.util.find_spec("svmorph"):
             return True
         if slicer.app.testingEnabled():
-            self.delayDisplay("svmorph is not installed; skipping (no pip install while testing)")
+            logging.warning(
+                "SDFStent test: svmorph is not installed and is not pip-installed while Slicer is "
+                "running with --testing; skipping the stent deployment checks of this test."
+            )
             return False
         self.delayDisplay("Installing svmorph...")
         slicer.util.pip_install("svmorph")
