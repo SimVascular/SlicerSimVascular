@@ -2523,6 +2523,18 @@ class seqsegLogic(ScriptedLoadableModuleLogic):
         """
         import shlex
 
+        # Under ctest (--testing) Slicer's Python is shared: on the extensions
+        # factory every extension is tested against the same python-install,
+        # several tests at a time. Changing packages there (for example
+        # downgrading NumPy) breaks the extensions tested after this one.
+        if self._slicerTesting():
+            raise InstallError(
+                _("Python packages are not installed while Slicer is running with --testing ({requirement}).").format(
+                    requirement=requirement
+                ),
+                restartRequired=False,
+            )
+
         arg = self._pipRequirementArg(requirement)
         spec = requirement.partition(" --")[0]
         from packaging.requirements import Requirement
