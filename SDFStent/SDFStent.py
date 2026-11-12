@@ -1515,13 +1515,28 @@ class SDFStentTest(ScriptedLoadableModuleTest):
         self.setUp()
         self.test_SDFStent_centerlineModelWithReversedPointIds()
 
+    def _svmorphAvailable(self):
+        """svmorph is installed on demand by the module. A test run (--testing) must not
+        pip-install it: on the extensions factory all extensions share one Python, and
+        svmorph pulls jax/jaxlib/ml_dtypes, which can change NumPy for everyone else."""
+        if importlib.util.find_spec("svmorph"):
+            return True
+        if slicer.app.testingEnabled():
+            logging.warning(
+                "SDFStent test: svmorph is not installed and is not pip-installed while Slicer is "
+                "running with --testing; skipping the stent deployment checks of this test."
+            )
+            return False
+        self.delayDisplay("Installing svmorph...")
+        slicer.util.pip_install("svmorph")
+        return True
+
     def test_SDFStent_deployVessel01(self):
         import numpy as np
         from vtk.util.numpy_support import vtk_to_numpy
 
-        if not importlib.util.find_spec("svmorph"):
-            self.delayDisplay("Installing svmorph...")
-            slicer.util.pip_install("svmorph")
+        if not self._svmorphAvailable():
+            return
 
         self.delayDisplay("Loading Vessel01 sample data")
         import SampleData
@@ -1665,6 +1680,8 @@ class SDFStentTest(ScriptedLoadableModuleTest):
     def test_SDFStent_centerlineModelWithReversedPointIds(self):
         """Extract Centerline's centerline model lists its point ids from last to first. The stent
         must still be centred on the center point; it used to land a stent length away from it."""
+        if not self._svmorphAvailable():
+            return
         import numpy as np
         from vtk.util.numpy_support import vtk_to_numpy
 
