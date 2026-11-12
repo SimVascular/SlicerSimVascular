@@ -82,7 +82,7 @@ A fresh panel starts on **Aorta MR** with that row. CTA-cardio is CT, so switch 
 
 ## Technical details
 
-The module follows the [SeqSeg CLI](https://github.com/numisveinsson/SeqSeg/tree/main). It does not import the `seqseg` package: this file is itself named `seqseg`, so the import would load the module. The console script is run as a process, and the progress dialog drains its output so the panel does not freeze.
+The module follows the [SeqSeg CLI](https://github.com/numisveinsson/SeqSeg/tree/main). It does not import the `seqseg` package: this file is itself named `seqseg`, so the import would load the module. The console script is run as a process, and the progress dialog drains its output so the panel does not freeze. The child inherits Slicer's environment, whose `PYTHONPATH` lists this extension's `qt-scripted-modules` ahead of site-packages. Left as it is, `from seqseg.seqseg import main` in the console script loads this file. Outside the application `qt` has no `QColor`, and the import dies in `parameterNodeWrapper` with `AttributeError: module 'qt' has no attribute 'QColor'`. Entries that contain a top-level `seqseg.py` are removed from the child's `PYTHONPATH`. The pip package is a directory named `seqseg`, so it stays.
 
 1. The output directory becomes the SeqSeg data directory, with an `images/` subdirectory.
 2. The input volume is saved there as `{VolumeName}.nii.gz`. Slicer writes that file in millimetres.

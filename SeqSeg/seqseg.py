@@ -3317,6 +3317,27 @@ class seqsegLogic(ScriptedLoadableModuleLogic):
             )
             return True
 
+    @staticmethod
+    def pythonpath_without_scripted_seqseg(pythonpath: str) -> str:
+        """Drop PYTHONPATH entries that are this module rather than the pip package.
+
+        The console script does ``from seqseg.seqseg import main``. Slicer's
+        launcher puts this extension's ``qt-scripted-modules`` on PYTHONPATH,
+        ahead of site-packages, and the child inherits that environment. The
+        file there is also named ``seqseg.py``, so the import executes this
+        module. Outside the application ``qt`` has no ``QColor``, and
+        ``parameterNodeWrapper`` raises ``AttributeError`` while the
+        serializer class body is evaluated. The pip package is a directory
+        named ``seqseg`` with ``seqseg/seqseg.py`` inside it, so an entry
+        whose top level is the file ``seqseg.py`` is the module.
+        """
+        kept = []
+        for entry in pythonpath.split(os.pathsep):
+            if entry and os.path.isfile(os.path.join(entry, "seqseg.py")):
+                continue
+            kept.append(entry)
+        return os.pathsep.join(kept)
+
     def _run_seqseg_cli(self, seqseg_cmd, cwd, progress=None):
         """Run seqseg without blocking Slicer's event loop.
 
@@ -3325,11 +3346,21 @@ class seqsegLogic(ScriptedLoadableModuleLogic):
         cancelled. QProcess keeps the progress dialog's Cancel button alive.
         The pipes are drained while the process runs: if they fill, the child
         blocks and Cancel never arrives.
+
+        PYTHONPATH is copied with this module's directory removed. Leaving it
+        makes the console script import this file and exit 1 on ``qt.QColor``
+        before the pip package's ``main`` is reached.
         """
         logging.info(f"Running SeqSeg command: {' '.join(seqseg_cmd)}")
         process = qt.QProcess()
         process.setWorkingDirectory(cwd)
         process.setProcessChannelMode(qt.QProcess.SeparateChannels)
+        environment = qt.QProcessEnvironment()
+        for key, value in os.environ.items():
+            if key.upper() == "PYTHONPATH":
+                value = self.pythonpath_without_scripted_seqseg(value)
+            environment.insert(key, value)
+        process.setProcessEnvironment(environment)
         # PythonQt does not expose QStringList. start() accepts a list of strings.
         arguments = [str(argument) for argument in seqseg_cmd[1:]]
         process.start(seqseg_cmd[0], arguments)
